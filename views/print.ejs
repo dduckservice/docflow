@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<title><%= data.doc.number %></title>
+<meta name="df-title" content="<%= data.f.titleTh %>"><meta name="df-type" content="<%= data.f.docType %>"><meta name="df-pay" content="<%= data.f.hasPayBox ? 1 : 0 %>"><meta name="df-deliver" content="<%= data.f.canDeliver ? 1 : 0 %>">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+@page{size:A4;margin:<%= data.mode === 'pdf' ? '0' : '15mm' %>}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font-family:'Sarabun','TH Sarabun New',Tahoma,sans-serif;font-size:13.5px;color:#222;line-height:1.55}
+.page{padding:<%= data.padY %>px <%= data.padX %>px}
+table{border-collapse:collapse}
+.w100{width:100%}
+.outer{width:100%;height:<%= data.f.bodyH %>}
+.outer>tbody>tr>td{padding:0}
+.acc{color:<%= data.f.accent %>}
+.title{font-size:30px;font-weight:700;color:<%= data.f.accent %>;line-height:1.2;text-align:right}
+.sub{font-size:12px;color:#777;text-align:right}
+.cname{font-weight:700;font-size:15px}
+.meta td{padding:4px 0;vertical-align:top;border-top:1px solid #e2e2e2;border-bottom:1px solid #e2e2e2}
+.meta td.k{color:<%= data.f.accent %>;width:38%}
+.items{margin-top:22px}
+.items th{padding:9px 6px;font-weight:400;text-align:center;border-top:1px solid #d6d6d6;border-bottom:1px solid #d6d6d6}
+.items td{padding:9px 6px;vertical-align:top;border-bottom:1px solid #e2e2e2}
+.r{text-align:right}.c{text-align:center}
+.tot td{padding:5px 0;vertical-align:top}
+.tot td.k{color:<%= data.f.accent %>;text-align:right;padding-right:22px;font-weight:600}
+.tot td.v{text-align:right;white-space:nowrap}
+.tot tr.grand td{font-weight:700;font-size:14.5px}
+.tot tr.grand td.v{color:#111}
+.sig td{vertical-align:bottom}
+.line{border-bottom:1px solid #bdbdbd;padding:32px 2px 2px;line-height:1.35;text-align:center}
+.lbl{text-align:center;padding-top:3px}
+.pay{margin-top:18px;border:1px solid #d6d6d6;border-radius:8px;background:#fafafa;padding:10px 14px 12px}
+.payhd{font-weight:700;color:<%= data.f.accent %>;font-size:14px}
+.paynote{font-weight:400;color:#777;font-size:12px}
+.payrow{margin:7px 0 6px}
+.pm{display:inline-block;margin-right:26px;white-space:nowrap}
+.bx{display:inline-block;width:15px;height:15px;border:1.5px solid #555;border-radius:3px;margin-right:6px;vertical-align:-3px;background:#fff}
+.bx .in{display:block;width:9px;height:9px;margin:1.5px;background:<%= data.f.accent %>}
+.paytb td{padding:0 14px 0 0;vertical-align:bottom}
+.paytb td:last-child{padding-right:0}
+.pl{font-size:11.5px;color:#777;margin-bottom:1px}
+.ul{border-bottom:1px solid #9a9a9a;min-height:21px;padding:0 3px;line-height:1.5}
+.notes{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;font-size:13px;line-height:1.6}
+.rib{position:relative;width:90px;height:90px;margin-left:auto}
+.rib img{width:90px;height:90px;display:block}
+.rib .rn{position:absolute;top:8px;right:15px;color:#fff;font-size:24px;font-weight:600;line-height:1}
+<% if (data.mode !== 'pdf') { %>
+/* หน้าจอ (ตัวอย่างเอกสาร): พื้นหลังเทา กระดาษ A4 สีขาวมีเงา ซ้อนต่อกันทีละใบ ไม่กระทบการพิมพ์ */
+@media screen{
+html,body{background:#e9ecf1}
+body{padding:20px 0 4px}
+.page{box-sizing:border-box;width:210mm;min-height:297mm;padding:15mm;margin:0 auto 20px;background:#fff;box-shadow:0 2px 14px rgba(20,40,80,.18)}
+}
+<% } %>
+</style>
+</head>
+<body>
+<% var en = data.lang === 'en'; var T = function(th, e) { return en ? e : th; }; %>
+<% data.pages.forEach(function(pg, pi) { var del = pg.kind === 'del'; var lab = pg.label === 'orig' ? data.f.lblOrig : pg.label === 'copy' ? data.f.lblCopy : data.f.subTitle; %>
+<div class="page"<% if (pi < data.pages.length - 1) { %> style="page-break-after:always"<% } %>>
+<table class="outer">
+<tr><td style="vertical-align:top">
+
+<!-- โลโก้ + มุมสามเหลี่ยม + ชื่อเอกสาร -->
+<table class="w100"><tr>
+<td style="vertical-align:top;width:50%">
+<% if (data.logoData) { %><img src="<%- data.logoData %>" style="max-height:92px;max-width:240px"><% } %>
+</td>
+<td style="vertical-align:top;width:50%;text-align:right">
+<div class="rib"><img src="<%- data.f.tri %>"><% if (data.showNo) { %><span class="rn"><%= pi + 1 %></span><% } %></div>
+<div class="title"><%= del ? data.f.delTitle : data.f.titleTh %></div>
+<% if (lab) { %><div class="sub"><%= lab %></div><% } %>
+</td></tr></table>
+
+<!-- ข้อมูลบริษัท + เลขที่เอกสาร -->
+<table class="w100" style="margin-top:14px"><tr>
+<td style="vertical-align:top;width:54%;padding-right:26px">
+<div class="cname"><%= data.company.companyName %></div>
+<% if (data.company.companyAddress) { %><div><%= data.company.companyAddress %></div><% } %>
+<% if (data.company.companyTaxId) { %><div><%= T('เลขประจำตัวผู้เสียภาษี', 'Tax ID') %> <%= data.company.companyTaxId %></div><% } %>
+<% if (data.company.companyPhone) { %><div><%= T('โทร.', 'Tel.') %> <%= data.company.companyPhone %></div><% } %>
+<% if (data.company.companyEmail) { %><div><%= T('อีเมล', 'Email') %> <%= data.company.companyEmail %></div><% } %>
+</td>
+<td style="vertical-align:top;width:46%">
+<table class="w100 meta">
+<tr><td class="k"><%= T('เลขที่', 'No.') %></td><td><%= data.doc.number %></td></tr>
+<tr><td class="k"><%= T('วันที่', 'Date') %></td><td><%= data.f.date %></td></tr>
+<% if (data.f.dueLabel) { %><tr><td class="k"><%= data.f.dueLabel %></td><td><%= data.f.dueDate %></td></tr><% } %>
+<% if (data.f.ref) { %><tr><td class="k"><%= T('อ้างอิง', 'Ref.') %></td><td><%= data.f.ref %></td></tr><% } %>
+<% if (data.company.signatoryName) { %><tr><td class="k"><%= data.f.sellerLabel %></td><td><%= data.company.signatoryName %></td></tr><% } %>
+</table>
+</td></tr></table>
+
+<!-- ลูกค้า -->
+<% if (data.doc.customerName || data.f.project) { %><div style="margin-top:18px">
+<div class="acc"><%= data.f.partyLabel %></div>
+<div class="cname"><%= data.doc.customerName %></div>
+<% if (data.doc.customerAddress) { %><div><%= data.doc.customerAddress %></div><% } %>
+<% if (data.doc.customerTaxId) { %><div><%= T('เลขประจำตัวผู้เสียภาษี', 'Tax ID') %> <%= data.doc.customerTaxId %></div><% } %>
+<% if (data.doc.customerPhone) { %><div><%= T('โทร.', 'Tel.') %> <%= data.doc.customerPhone %></div><% } %>
+<% if (data.f.project) { %><div><%= T('งาน/โครงการ', 'Project') %>: <%= data.f.project %></div><% } %>
+</div><% } %>
+
+<!-- รายการ -->
+<table class="w100 items">
+<% if (del) { %>
+<tr><th style="width:6%">#</th><th><%= T('รายละเอียด', 'Description') %></th><th style="width:20%"><%= T('จำนวน', 'Qty') %></th></tr>
+<% data.f.items.forEach(function(it, i) { %>
+<tr><td class="c"><%= i + 1 %></td><td><%= it.description %></td><td class="c"><%= it.qty %> <%= it.unit %></td></tr>
+<% }); %>
+<% } else { %>
+<tr><th style="width:5%">#</th><th><%= T('รายละเอียด', 'Description') %></th><th style="width:13%"><%= T('จำนวน', 'Qty') %></th><th style="width:15%"><%= T('ราคาต่อหน่วย', 'Unit price') %></th>
+<% if (data.f.hasDisc) { %><th style="width:11%"><%= T('ส่วนลด', 'Discount') %></th><% } %><th style="width:15%"><%= T('ยอดรวม', 'Amount') %></th></tr>
+<% data.f.items.forEach(function(it, i) { %>
+<tr><td class="c"><%= i + 1 %></td><td><%= it.description %></td><td class="c"><%= it.qty %> <%= it.unit %></td><td class="r"><%= it.price %></td>
+<% if (data.f.hasDisc) { %><td class="r"><%= it.disc %></td><% } %><td class="r"><%= it.amount %></td></tr>
+<% }); %>
+<% } %>
+</table>
+
+<% if (del) { %>
+<% if (data.doc.notes) { %><div style="margin-top:14px"><div class="acc"><%= T('หมายเหตุ', 'Notes') %></div><div class="notes"><%= data.doc.notes %></div></div><% } %>
+<% } else { %>
+<!-- ยอดรวม -->
+<table class="w100" style="margin-top:14px"><tr>
+<td style="vertical-align:top;width:48%;padding-right:16px">
+<div>(<%= data.f.words %>)</div>
+<% if (data.doc.notes) { %><div style="margin-top:12px"><div class="acc"><%= T('หมายเหตุ', 'Notes') %></div><div class="notes"><%= data.doc.notes %></div></div><% } %>
+</td>
+<td style="vertical-align:top;width:52%">
+<table class="w100 tot">
+<tr><td class="k"><%= T('รวมเป็นเงิน', 'Subtotal') %></td><td class="v"><%= data.f.subtotal %> <%= T('บาท', 'THB') %></td></tr>
+<% if (data.f.hasDiscTotal) { %>
+<tr><td class="k"><%= T('ส่วนลด', 'Discount') %></td><td class="v">-<%= data.f.discount %> <%= T('บาท', 'THB') %></td></tr>
+<tr><td class="k"><%= T('ยอดหลังหักส่วนลด', 'After discount') %></td><td class="v"><%= data.f.net %> <%= T('บาท', 'THB') %></td></tr>
+<% } %>
+<tr><td class="k"><%= data.f.vatRate ? T('ภาษีมูลค่าเพิ่ม ', 'VAT ') + data.f.vatRate + '%' : T('ไม่คิดภาษีมูลค่าเพิ่ม', 'No VAT') %></td><td class="v"><%= data.f.vat %> <%= T('บาท', 'THB') %></td></tr>
+<tr class="grand"><td class="k"><%= T('จำนวนเงินรวมทั้งสิ้น', 'Grand total') %></td><td class="v"><%= data.f.total %> <%= T('บาท', 'THB') %></td></tr>
+<% if (data.f.whtRate) { %>
+<tr><td class="k"><%= T('หัก ณ ที่จ่าย ', 'Withholding tax ') %><%= data.f.whtRate %>%</td><td class="v">-<%= data.f.wht %> <%= T('บาท', 'THB') %></td></tr>
+<tr class="grand"><td class="k"><%= T('ยอดชำระ', 'Net payable') %></td><td class="v"><%= data.f.payable %> <%= T('บาท', 'THB') %></td></tr>
+<% } %>
+</table>
+</td></tr></table>
+
+<% if (data.f.pay) { %>
+<!-- การชำระเงิน (ใบเสร็จ) -->
+<div class="pay">
+<div class="payhd"><%= T('การชำระเงิน', 'Payment') %> <span class="paynote"><%= T('(การชำระเงินจะสมบูรณ์เมื่อบริษัทได้รับเงินเรียบร้อยแล้ว)', '(Payment is complete once the company has received the funds)') %></span></div>
+<div class="payrow">
+<span class="pm"><span class="bx"><% if (data.f.pay.cash) { %><span class="in"></span><% } %></span><%= T('เงินสด', 'Cash') %></span>
+<span class="pm"><span class="bx"><% if (data.f.pay.cheque) { %><span class="in"></span><% } %></span><%= T('เช็ค', 'Cheque') %></span>
+<span class="pm"><span class="bx"><% if (data.f.pay.transfer) { %><span class="in"></span><% } %></span><%= T('โอนเงิน', 'Transfer') %></span>
+<span class="pm"><span class="bx"><% if (data.f.pay.card) { %><span class="in"></span><% } %></span><%= T('บัตรเครดิต', 'Credit card') %></span>
+</div>
+<table class="w100 paytb"><tr>
+<td style="width:34%"><div class="pl"><%= T('ธนาคาร', 'Bank') %></div><div class="ul"><%= data.f.pay.bank %>&nbsp;</div></td>
+<td style="width:24%"><div class="pl"><%= T('เลขที่', 'No.') %></div><div class="ul"><%= data.f.pay.no %>&nbsp;</div></td>
+<td style="width:20%"><div class="pl"><%= T('วันที่', 'Date') %></div><div class="ul"><%= data.f.pay.date %>&nbsp;</div></td>
+<td style="width:22%"><div class="pl"><%= T('จำนวนเงิน (บาท)', 'Amount (THB)') %></div><div class="ul r"><%= data.f.pay.amount %>&nbsp;</div></td>
+</tr></table>
+</div>
+<% } %>
+<% } %>
+
+</td></tr>
+
+<!-- ลงชื่อ (ตรึงไว้ล่างสุดของหน้า) -->
+<tr><td style="vertical-align:bottom;height:1px;padding-top:16px">
+<table class="w100 sig"><tr>
+<td style="width:50%;padding-right:18px">
+<div style="padding-left:4px;margin-bottom:6px"><% if (data.doc.customerName) { %><%= T('ในนาม', 'On behalf of') %> <%= data.doc.customerName %><% } else { %>&nbsp;<% } %></div>
+<table class="w100"><tr>
+<td style="width:62%"><div class="line">&nbsp;</div><div class="lbl"><%= del ? data.f.delSignLeft : data.f.signLeft %></div></td>
+<td style="width:6%"></td>
+<td style="width:32%"><div class="line">&nbsp;</div><div class="lbl"><%= T('วันที่', 'Date') %></div></td>
+</tr></table>
+</td>
+<td style="width:50%;padding-left:18px">
+<div style="text-align:right;margin-bottom:6px"><%= T('ในนาม', 'On behalf of') %> <%= data.company.companyName %></div>
+<table class="w100"><tr>
+<td style="width:62%"><div class="line"><%= data.company.signatoryName %>&nbsp;</div><div class="lbl"><%= del ? data.f.delSignRight : data.f.signRight %></div></td>
+<td style="width:6%"></td>
+<td style="width:32%"><div class="line"><%= data.f.date %>&nbsp;</div><div class="lbl"><%= T('วันที่', 'Date') %></div></td>
+</tr></table>
+</td>
+</tr></table>
+</td></tr>
+</table>
+</div>
+<% }); %>
+<% if (data.mode !== 'pdf') { %>
+<script>
+// ย่อกระดาษให้พอดีความกว้างหน้าต่าง (เฉพาะบนจอ) และคืนค่าเดิมตอนพิมพ์
+(function(){function fit(){var w=document.documentElement.clientWidth,s=Math.min(1,(w-16)/794);document.body.style.zoom=s<1?s:''}
+window.addEventListener('resize',fit);window.addEventListener('beforeprint',function(){document.body.style.zoom=''});window.addEventListener('afterprint',fit);fit()})();
+</script>
+<% } %>
+</body>
+</html>
