@@ -1,0 +1,137 @@
+# ค่าต่าง ๆ อ่านจากไฟล์ .env ในโฟลเดอร์เดียวกัน (ไม่มีไฟล์ .env ก็รันได้ ใช้ค่าเริ่มต้น)
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-docflow}
+      POSTGRES_USER: ${POSTGRES_USER:-docflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?กรุณาตั้ง POSTGRES_PASSWORD ในไฟล์ .env}
+      TZ: Asia/Bangkok
+    ports:
+      # เปิดให้โปรแกรมบนเครื่องเซิร์ฟเวอร์ (DBeaver, pgAdmin, psql) เข้าดูได้ — 127.0.0.1 = เข้าได้เฉพาะจากเครื่องนี้
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:-docflow}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?กรุณาตั้ง POSTGRES_PASSWORD ในไฟล์ .env}
+      PGDATABASE: ${POSTGRES_DB:-docflow}
+      ACCESS_KEY: ${ACCESS_KEY:-}
+      TOKEN_SECRET: ${TOKEN_SECRET:-}
+      SESSION_HOURS: ${SESSION_HOURS:-12}
+      LOCK_ISSUED_DOCS: ${LOCK_ISSUED_DOCS:-true}
+      STORAGE_DIR: /app/Storage
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      CRON: ${CRON:-on}
+      LICENSE_CRON: ${LICENSE_CRON:-0 8 * * *}
+      BACKUP_CRON: ${BACKUP_CRON:-0 2 * * *}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-30}
+      TRASH_KEEP_DAYS: ${TRASH_KEEP_DAYS:-30}
+      TRASH_CRON: ${TRASH_CRON:-0 3 * * *}
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-on}
+      TRIAL_DAYS: ${TRIAL_DAYS:-7}
+      SIGNUP_PER_HOUR: ${SIGNUP_PER_HOUR:-5}
+      # ความทนทานของระบบ (ดู .env.example)
+      PG_POOL_MAX: ${PG_POOL_MAX:-10}
+      PG_STATEMENT_TIMEOUT: ${PG_STATEMENT_TIMEOUT:-60000}
+      PG_IDLE_TX_TIMEOUT: ${PG_IDLE_TX_TIMEOUT:-120000}
+      PDF_CONCURRENCY: ${PDF_CONCURRENCY:-2}
+      LOGIN_IP_MAX_FAIL: ${LOGIN_IP_MAX_FAIL:-50}
+      LOGIN_LOG_DAYS: ${LOGIN_LOG_DAYS:-180}
+      MAINT_CRON: ${MAINT_CRON:-30 3 * * *}
+      DISK_WARN_PCT: ${DISK_WARN_PCT:-10}
+      BACKUP_DIR: /app/Backups
+      # แจ้งเตือน/ตอบแชทผ่าน Telegram (ดู .env.example)
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_IDS: ${TELEGRAM_CHAT_IDS:-}
+      TELEGRAM_REPLY_AS: ${TELEGRAM_REPLY_AS:-}
+      # แสดงในหน้าเว็บเท่านั้น (ให้รู้ว่าไฟล์อยู่ที่ไหนบนเครื่องเซิร์ฟเวอร์)
+      STORAGE_HOST_PATH: ${STORAGE_LOCAL_DIR:-./Storage}
+      BACKUP_HOST_PATH: ${BACKUP_LOCAL_DIR:-./Backups}
+      FULL_BACKUP_CRON: ${FULL_BACKUP_CRON:-0 1 * * *}
+      FULL_BACKUP_KEEP: ${FULL_BACKUP_KEEP:-7}
+      EXPORT_KEEP_DAYS: ${EXPORT_KEEP_DAYS:-30}
+    ports:
+      # ใช้ผ่าน Cloudflare Tunnel อย่างเดียว → ตั้ง APP_BIND=127.0.0.1 ใน .env (คนนอกเข้าพอร์ต 3000 ตรง ๆ ไม่ได้)
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-3000}:3000"
+    volumes:
+      # ไฟล์ทั้งหมดของระบบ (PDF, ไฟล์อัปโหลด, ไฟล์แชท, ถังขยะ) — ค่าเริ่มต้น: โฟลเดอร์ Storage ข้างไฟล์นี้
+      # เก็บที่ดิสก์ลูกที่ 2 หรือ NAS (QNAP/Synology) ได้: ตั้ง STORAGE_LOCAL_DIR ใน .env เช่น /mnt/qnap/docflow/Storage
+      - ${STORAGE_LOCAL_DIR:-./Storage}:/app/Storage
+      # หน้าเว็บ: วาง public/index.html ใหม่ทับแล้วรีเฟรชเบราว์เซอร์ได้ทันที
+      - ./public:/app/public:ro
+      # ไฟล์สำรองทั้งระบบที่สร้างจากหน้าเว็บ → Backups/full (คัดลอกลงแฟลชไดรฟ์ได้)
+      - ${BACKUP_LOCAL_DIR:-./Backups}:/app/Backups
+    shm_size: "512mb"            # Chromium ใช้ /dev/shm ตอนสร้าง PDF
+
+  # หน้าเว็บสำหรับดูฐานข้อมูล: http://localhost:8080
+  # System = PostgreSQL, Server = db, Username = POSTGRES_USER, Password = POSTGRES_PASSWORD, Database = POSTGRES_DB
+  # ปิดไว้เป็นค่าเริ่มต้น เปิดเมื่อต้องการ: docker compose --profile adminer up -d adminer  (ใช้เสร็จ: docker compose stop adminer)
+  adminer:
+    image: adminer
+    profiles: ["adminer"]
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    ports:
+      - "127.0.0.1:${ADMINER_PORT:-8080}:8080"
+
+  # สำรองข้อมูลอัตโนมัติ (ฐานข้อมูล + Storage + .env) ไปที่โฟลเดอร์ Backups และ Google Drive (ผ่าน rclone)
+  # เปิดใช้: COMPOSE_PROFILES=backup (หรือ tunnel,backup) ใน .env · สั่งสำรองทันที: docker compose exec backup sh /backup/backup.sh
+  backup:
+    build: ./backup
+    profiles: ["backup"]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-docflow}
+      POSTGRES_USER: ${POSTGRES_USER:-docflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?กรุณาตั้ง POSTGRES_PASSWORD ในไฟล์ .env}
+      TZ: Asia/Bangkok
+      BACKUP_ALL_CRON: ${BACKUP_ALL_CRON:-30 2 * * *}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-30}
+      RCLONE_REMOTE: ${RCLONE_REMOTE:-}
+    volumes:
+      - ${STORAGE_LOCAL_DIR:-./Storage}:/storage:ro
+      - ./.env:/config/.env:ro
+      - ./docker-compose.yml:/config/docker-compose.yml:ro
+      # ไฟล์ rclone.conf (สิทธิ์เข้า Google Drive) วางไว้ที่ backup/rclone.conf
+      - ./backup:/backup-config
+      # ปลายทางในเครื่อง (เปลี่ยนเป็นโฟลเดอร์ Google Drive for desktop ได้ ดู BACKUP_LOCAL_DIR ใน .env)
+      - ${BACKUP_LOCAL_DIR:-./Backups}:/backups
+
+  # Cloudflare Tunnel: เปิดเว็บให้เข้าจากอินเทอร์เน็ตผ่าน https://โดเมนของคุณ โดยไม่ต้องเปิดพอร์ตเราเตอร์
+  # เปิดใช้: ใส่ CLOUDFLARE_TUNNEL_TOKEN และ COMPOSE_PROFILES=tunnel ใน .env แล้ว docker compose up -d
+  # ใน Cloudflare ตั้ง Public Hostname → Service = HTTP, URL = app:3000
+  cloudflared:
+    image: cloudflare/cloudflared:2024.12.2
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - app
+
+volumes:
+  pgdata:

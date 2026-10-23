@@ -1,0 +1,28 @@
+{
+  "name": "docflow",
+  "version": "2.0.0",
+  "private": true,
+  "description": "DocFlow — ระบบจัดการเอกสารธุรกิจ (Node.js + Express + PostgreSQL)",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "create-admin": "node scripts/create-admin.js",
+    "reset-password": "node scripts/reset-password.js",
+    "set-super": "node scripts/set-super.js",
+    "backup": "node scripts/backup.js",
+    "restore": "node scripts/restore.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "ejs": "^3.1.10",
+    "express": "^4.21.2",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.16",
+    "pg": "^8.13.1",
+    "puppeteer-core": "^23.10.4"
+  }
+}
