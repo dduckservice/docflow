@@ -16,7 +16,7 @@ table{border-collapse:collapse}
 .outer{width:100%;height:<%= data.f.bodyH %>}
 .outer>tbody>tr>td{padding:0}
 .acc{color:<%= data.f.accent %>}
-.title{font-size:<%= data.f.titleSize || 30 %>px;font-weight:700;color:<%= data.f.accent %>;line-height:1.15;text-align:right;white-space:nowrap}
+.title{font-size:30px;font-weight:700;color:<%= data.f.accent %>;line-height:1.2;text-align:right}
 .sub{font-size:12px;color:#777;text-align:right}
 .cname{font-weight:700;font-size:15px}
 .meta td{padding:4px 0;vertical-align:top;border-top:1px solid #e2e2e2;border-bottom:1px solid #e2e2e2}
@@ -136,11 +136,7 @@ body{padding:20px 0 4px}
 <tr><td class="k"><%= T('รวมเป็นเงิน', 'Subtotal') %></td><td class="v"><%= data.f.subtotal %> <%= T('บาท', 'THB') %></td></tr>
 <% if (data.f.hasDiscTotal) { %>
 <tr><td class="k"><%= T('ส่วนลด', 'Discount') %></td><td class="v">-<%= data.f.discount %> <%= T('บาท', 'THB') %></td></tr>
-<tr><td class="k"><%= T('ยอดหลังหักส่วนลด', 'After discount') %></td><td class="v"><%= data.f.afterDisc %> <%= T('บาท', 'THB') %></td></tr>
-<% } %>
-<% if (data.f.hasDeposit) { %>
-<tr><td class="k"><%= T('หักเงินมัดจำ', 'Less deposit') %><%= data.f.depositRef ? ' (' + data.f.depositRef + ')' : '' %></td><td class="v">-<%= data.f.deposit %> <%= T('บาท', 'THB') %></td></tr>
-<tr><td class="k"><%= T('มูลค่าที่ต้องเสียภาษี (VAT)', 'Taxable amount') %></td><td class="v"><%= data.f.net %> <%= T('บาท', 'THB') %></td></tr>
+<tr><td class="k"><%= T('ยอดหลังหักส่วนลด', 'After discount') %></td><td class="v"><%= data.f.net %> <%= T('บาท', 'THB') %></td></tr>
 <% } %>
 <tr><td class="k"><%= data.f.vatRate ? T('ภาษีมูลค่าเพิ่ม ', 'VAT ') + data.f.vatRate + '%' : T('ไม่คิดภาษีมูลค่าเพิ่ม', 'No VAT') %></td><td class="v"><%= data.f.vat %> <%= T('บาท', 'THB') %></td></tr>
 <tr class="grand"><td class="k"><%= T('จำนวนเงินรวมทั้งสิ้น', 'Grand total') %></td><td class="v"><%= data.f.total %> <%= T('บาท', 'THB') %></td></tr>
