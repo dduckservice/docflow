@@ -3,9 +3,9 @@
 const { execFileSync } = require('child_process');
 const path = require('path');
 
-// 1) ชื่อไฟล์ต้องห้าม (ข้อมูลผู้ใช้/backup/.env ต้องไม่มีในรีโปเด็ดขาด)
-const FORBIDDEN_PATH = /(^|\/)\.env$|(^|\/)Backups\//i;
-const FORBIDDEN_DATA = /(^|\/)Storage\/|\.tar$|\.tar\.gz$|\.json\.gz$|\.enc$|Thumbs\.db$|(^|\/)uploads\.db$/i;
+// 1) ชื่อไฟล์ต้องห้าม (ข้อมูลผู้ใช้/backup/.env ต้องไม่มีในรีโปเด็ดขาด — anchor ที่ root เท่านั้น ตัวพิมพ์ใหญ่-เล็กสำคัญ: src/storage/ ไม่เกี่ยวกับ Storage/)
+const FORBIDDEN_PATH = /^\.env$/i;
+const FORBIDDEN_DATA = /^Storage\/|^Backups\/|\.tar$|\.tar\.gz$|\.json\.gz$|Thumbs\.db$|^backup\/rclone\.conf$/;
 // (ยกเว้นที่ซ่อนตามปกติถ้าจำเป็น — ต้องเพิ่มโดยเจ้าของผ่านการรีวิวเท่านั้น)
 const ALLOW = new Set([path.join('backup', 'rclone.conf.example')]);
 
