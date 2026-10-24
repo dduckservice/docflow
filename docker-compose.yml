@@ -35,7 +35,7 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:?กรุณาตั้ง POSTGRES_PASSWORD ในไฟล์ .env}
       PGDATABASE: ${POSTGRES_DB:-docflow}
       ACCESS_KEY: ${ACCESS_KEY:-}
-      TOKEN_SECRET: ${TOKEN_SECRET:?ต้องตั้ง TOKEN_SECRET ในไฟล์ .env — สร้างด้วย: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"}
+      TOKEN_SECRET: "${TOKEN_SECRET:?ยังไม่ได้ตั้ง TOKEN_SECRET ในไฟล์ .env (วิธีสร้างดู README หัวข้อ ความปลอดภัย)}"
       BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE:-}
       BOOTSTRAP_ADMIN_KEY: ${BOOTSTRAP_ADMIN_KEY:-}
       SESSION_HOURS: ${SESSION_HOURS:-12}
