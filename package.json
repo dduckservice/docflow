@@ -5,7 +5,7 @@
   "description": "DocFlow — ระบบจัดการเอกสารธุรกิจ (Node.js + Express + PostgreSQL)",
   "main": "src/server.js",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "start": "node src/server.js",
@@ -23,9 +23,9 @@
     "dotenv": "^16.4.5",
     "ejs": "^3.1.10",
     "express": "^4.21.2",
-    "node-cron": "^3.0.3",
-    "nodemailer": "^6.9.16",
+    "node-cron": "^4.6.0",
+    "nodemailer": "^10.2.1",
     "pg": "^8.13.1",
-    "puppeteer-core": "^23.10.4"
+    "puppeteer-core": "^25.16.0"
   }
 }

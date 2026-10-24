@@ -118,7 +118,7 @@ function launchBrowser() {
   return puppeteer.launch({
     executablePath: exe,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--font-render-hinting=none'],
-    headless: 'new',
+    headless: true,   // puppeteer v25: 'new' ถูกถอดออก — true คือ new headless แล้ว
     protocolTimeout: 60000
   }).then(b => { b.on('disconnected', () => { browserP = null; }); return b; })
     .catch(e => { browserP = null; console.error('[PDF] launch Chromium failed (' + exe + '):\n' + (e && e.stack || e)); throw e; });
