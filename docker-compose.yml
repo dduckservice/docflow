@@ -21,11 +21,14 @@ services:
 
   app:
     build: .
+    init: true                 # ให้ tini เป็น PID 1 คอยเก็บ process ลูกของ Chromium (สร้าง PDF)
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
     environment:
+      # HOME ของผู้ใช้ node — จำเป็นสำหรับ crashpad ของ Chromium ตอนสร้าง PDF (ไม่งั้น launch ไม่ขึ้น)
+      HOME: /home/node
       PGHOST: db
       PGPORT: 5432
       PGUSER: ${POSTGRES_USER:-docflow}

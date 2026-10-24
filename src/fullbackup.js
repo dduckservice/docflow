@@ -141,6 +141,7 @@ async function finish(job, err) {
   if (err) { job.state = 'error'; job.error = String(err.message || err); log(job, 'ไม่สำเร็จ: ' + job.error, 'error'); }
   else { job.state = 'done'; log(job, job.type === 'restore' ? 'กู้คืนข้อมูลเสร็จสมบูรณ์' : 'สำรองข้อมูลเสร็จสมบูรณ์', 'ok'); }
   await history(job).catch(() => {});
+  // แจ้งหน้าเว็บของ Super Admin ที่เปิดอยู่ ให้รีเฟรชรายการไฟล์สำรองทันที (โดยเฉพาะสำรองอัตโนมัติที่รันเบื้องหลัง)
   try { hub.toSupers({ type: 'backup', action: job.state, kind: job.kind || '', jobType: job.type }); } catch (e) {}
 }
 function startBackup(by, kind, note) {

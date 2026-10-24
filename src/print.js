@@ -10,11 +10,11 @@ const { fail, round2, parseVat, fmt, thDate, ceDate, bahtText, bahtTextEn, safeF
 const documents = require('./documents');
 const modules = require('./modules');
 
-const PAID_TYPES = ['receipt', 'cashsale'];
+const PAID_TYPES = ['receipt', 'cashsale', 'deposit'];
 const PDF_SAFE_PAD_PX = Number(process.env.PDF_SAFE_PAD_PX || 56);
 const PDF_PAD_Y_PX = Number(process.env.PDF_PAD_Y_PX || 38);
 const PDF_PAGE_BODY_PX = Number(process.env.PDF_PAGE_BODY_PX || 1020);
-const DOC_TYPE_FOLDER = { quotation: '01 ใบเสนอราคา', invoice: '02 ใบแจ้งหนี้', taxinvoice: '03 ใบกำกับภาษี', receipt: '04 ใบเสร็จรับเงิน', cashsale: '05 ขายเงินสด', po: '06 ใบสั่งซื้อ', gr: '07 ใบรับสินค้า', expense: '08 ค่าใช้จ่าย', product: '09 สินค้า' };
+const DOC_TYPE_FOLDER = { quotation: '01 ใบเสนอราคา', invoice: '02 ใบแจ้งหนี้', taxinvoice: '03 ใบกำกับภาษี', receipt: '04 ใบเสร็จรับเงิน', cashsale: '05 ขายเงินสด', deposit: '10 ใบรับเงินมัดจำ', po: '06 ใบสั่งซื้อ', gr: '07 ใบรับสินค้า', expense: '08 ค่าใช้จ่าย', product: '09 สินค้า' };
 const CANCEL_FOLDER_NAME = '_ยกเลิก';
 const TEMPLATE = path.join(__dirname, '..', 'views', 'print.ejs');
 
@@ -52,6 +52,7 @@ async function printModel(ctx, id, mode, opts) {
     taxinvoice: ['ใบกำกับภาษี', 'ต้นฉบับ (เอกสารออกเป็นชุด)', 'ครบกำหนด', 'ผู้รับสินค้า/บริการ', 'ผู้ออกใบกำกับภาษี'],
     receipt: ['ใบเสร็จรับเงิน', 'ต้นฉบับ (เอกสารออกเป็นชุด)', '', 'ผู้จ่ายเงิน', 'ผู้รับเงิน'],
     cashsale: ['ใบกำกับภาษี/ใบเสร็จรับเงิน (ขายเงินสด)', 'ต้นฉบับ (เอกสารออกเป็นชุด)', '', 'ผู้ซื้อ', 'ผู้รับเงิน'],
+    deposit: ['ใบรับเงินมัดจำ / ใบกำกับภาษี', 'ต้นฉบับ (เอกสารออกเป็นชุด)', '', 'ผู้จ่ายเงิน', 'ผู้รับเงิน'],
     po: ['ใบสั่งซื้อ', 'ต้นฉบับ', 'กำหนดรับของ', 'ผู้ขายรับทราบ', 'ผู้สั่งซื้อ'],
     gr: ['ใบรับสินค้า', 'ต้นฉบับ', '', 'ผู้ส่งสินค้า', 'ผู้รับสินค้า'],
     expense: ['บันทึกค่าใช้จ่าย', '', 'ครบกำหนด', 'ผู้รับเงิน', 'ผู้จ่ายเงิน'],
@@ -61,15 +62,19 @@ async function printModel(ctx, id, mode, opts) {
   const taxReceipt = t === 'receipt' && Number(d.vatRate) > 0;
   if (taxReceipt) L[0] = 'ใบกำกับภาษี/ใบเสร็จรับเงิน';
   if ((t === 'receipt' || t === 'cashsale') && noVat) L[0] = t === 'cashsale' ? 'ใบเสร็จรับเงิน (ขายเงินสด)' : 'ใบเสร็จรับเงิน';
+  if (t === 'deposit' && noVat) L[0] = 'ใบรับเงินมัดจำ';
   const LE = { quotation: ['Quotation', 'Due date', 'Customer', 'Approved by'], invoice: ['Invoice / Billing Note', 'Due date', 'Received by', 'Billed by'],
     taxinvoice: ['Tax Invoice', 'Due date', 'Received by', 'Issued by'], receipt: ['Receipt', '', 'Paid by', 'Received by'],
-    cashsale: ['Tax Invoice / Receipt (Cash Sale)', '', 'Buyer', 'Received by'], expense: ['Expense Record', 'Due date', 'Payee', 'Paid by'], product: ['Product Information', '', 'Approved by', 'Prepared by'],
+    cashsale: ['Tax Invoice / Receipt (Cash Sale)', '', 'Buyer', 'Received by'], deposit: ['Deposit Receipt / Tax Invoice', '', 'Paid by', 'Received by'], expense: ['Expense Record', 'Due date', 'Payee', 'Paid by'], product: ['Product Information', '', 'Approved by', 'Prepared by'],
     po: ['Purchase Order', 'Expected date', 'Acknowledged by', 'Ordered by'], gr: ['Goods Receipt', '', 'Delivered by', 'Received by'] }[t];
   let titleEn = LE[0];
   if (taxReceipt) titleEn = 'Tax Invoice / Receipt';
   if ((t === 'receipt' || t === 'cashsale') && noVat) titleEn = t === 'cashsale' ? 'Receipt (Cash Sale)' : 'Receipt';
+  if (t === 'deposit' && noVat) titleEn = 'Deposit Receipt';
   const isPurchase = t === 'po' || t === 'gr' || t === 'expense';
-  const net = round2(d.subtotal - d.discount), wr = Number(d.whtRate) || 0, wht = round2(net * wr / 100);
+  // Phase 2: หักเงินมัดจำ — ฐานภาษี = ยอดหลังหักส่วนลด − มัดจำ (VAT/WHT คิดบนฐานนี้)
+  const depAmt = round2(Number(d.depositAmount) || 0), afterDisc = round2(d.subtotal - d.discount);
+  const net = round2(afterDisc - depAmt), wr = Number(d.whtRate) || 0, wht = round2(net * wr / 100);
   data.lang = en ? 'en' : 'th'; data.pages = printPages(po); data.showNo = !!po; data.opts = po;
   data.mode = mode; data.padX = mode === 'pdf' ? PDF_SAFE_PAD_PX : 0; data.padY = mode === 'pdf' ? PDF_PAD_Y_PX : 0;
   const dt = en ? ceDate : thDate, pm = String(d.payMethods || '').split(',');
@@ -81,7 +86,8 @@ async function printModel(ctx, id, mode, opts) {
     ref: data.src ? String(data.src.number) : '', project: d.projectName || '',
     date: dt(d.date), dueDate: dt(d.dueDate), hasDisc: d.items.some(x => x.discount > 0),
     items: d.items.map(x => ({ description: x.description, qty: fmt(x.quantity, 3).replace(/\.?0+$/, ''), unit: x.unit, price: fmt(x.price), disc: fmt(x.discount), amount: fmt(x.amount) })),
-    subtotal: fmt(d.subtotal), discount: fmt(d.discount), hasDiscTotal: d.discount > 0, net: fmt(net),
+    subtotal: fmt(d.subtotal), discount: fmt(d.discount), hasDiscTotal: d.discount > 0, afterDisc: fmt(afterDisc), net: fmt(net),
+    hasDeposit: depAmt > 0, deposit: fmt(depAmt), depositRef: String(d.depositRef || ''),
     vat: fmt(d.vatAmount), vatRate: parseVat(d.vatRate), total: fmt(d.total), words: en ? bahtTextEn(d.total) : bahtText(d.total),
     whtRate: wr, wht: fmt(wht), payable: fmt(round2(d.total - wht)),
     pay: (PAID_TYPES.includes(t) && (!po || po.pay)) ? {

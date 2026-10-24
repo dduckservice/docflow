@@ -21,9 +21,10 @@ async function getIncomeReport(ctx, opts) {
   if (list.length) {
     (await ctx.all('SELECT DISTINCT extract(year FROM date)::int AS y FROM documents WHERE tenant_id = ANY($1::uuid[])', [list.map(t => t.id)])).forEach(r => years.add(r.y));
     const rows = await ctx.all(`SELECT * FROM documents WHERE tenant_id = ANY($1::uuid[]) AND type = ANY($2::text[]) AND status NOT IN ('cancelled','draft')
-      AND extract(year FROM date) = $3::int AND ($4::int = 0 OR extract(month FROM date) = $4::int)`, [list.map(t => t.id), basis === 'receipt' ? ['receipt', 'cashsale'] : ['invoice'], year, month]);
+      AND extract(year FROM date) = $3::int AND ($4::int = 0 OR extract(month FROM date) = $4::int)`, [list.map(t => t.id), basis === 'receipt' ? ['receipt', 'cashsale', 'deposit'] : ['invoice', 'deposit'], year, month]);
+    // Phase 2: รวมใบรับเงินมัดจำเป็นรายได้ด้วย และหักยอดมัดจำออกจาก net ของเอกสารงวดสุดท้าย (กันนับซ้ำ)
     rows.forEach(d => docs.push({ id: String(d.id), tenantId: String(d.tenantId), company: names[String(d.tenantId)], number: String(d.number), date: dateOut(d.date),
-      customerName: String(d.customerName || '').trim(), net: round2((Number(d.subtotal) || 0) - (Number(d.discount) || 0)), vatRate: Number(d.vatRate) || 0,
+      customerName: String(d.customerName || '').trim(), net: round2((Number(d.subtotal) || 0) - (Number(d.discount) || 0) - (Number(d.depositAmount) || 0)), vatRate: Number(d.vatRate) || 0,
       vat: Number(d.vatAmount) || 0, total: Number(d.total) || 0 }));
   }
   docs.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.number < b.number ? -1 : 1);
@@ -40,7 +41,7 @@ async function getDashboardData(ctx, opts) {
     (await ctx.all('SELECT DISTINCT extract(year FROM date)::int AS y FROM documents WHERE tenant_id = ANY($1::uuid[])', [ids])).forEach(r => years.add(r.y));
     (await ctx.all('SELECT * FROM documents WHERE tenant_id = ANY($1::uuid[]) AND extract(year FROM date) = $2', [ids, year])).forEach(d => docs.push({
       tenantId: String(d.tenantId), company: names[String(d.tenantId)], type: String(d.type), status: String(d.status), date: dateOut(d.date), number: String(d.number),
-      customerName: String(d.customerName || '').trim(), net: round2((Number(d.subtotal) || 0) - (Number(d.discount) || 0)), total: Number(d.total) || 0 }));
+      customerName: String(d.customerName || '').trim(), net: round2((Number(d.subtotal) || 0) - (Number(d.discount) || 0) - (Number(d.depositAmount) || 0)), total: Number(d.total) || 0 }));
     (await ctx.all('SELECT * FROM expenses WHERE tenant_id = ANY($1::uuid[]) AND extract(year FROM date) = $2', [ids, year])).forEach(e => {
       if (expStatusOf(e.status) === 'cancelled') return;
       expenses.push({ tenantId: String(e.tenantId), company: names[String(e.tenantId)], date: dateOut(e.date), category: String(e.category || 'อื่นๆ'), net: Number(e.amountBeforeVat) || 0, total: Number(e.total) || 0 });

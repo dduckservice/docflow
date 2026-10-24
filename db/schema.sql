@@ -515,3 +515,15 @@ CREATE TABLE IF NOT EXISTS upgrade_requests (
 );
 CREATE INDEX IF NOT EXISTS upgrade_requests_status ON upgrade_requests (status, requested_at DESC);
 CREATE INDEX IF NOT EXISTS upgrade_requests_by ON upgrade_requests (requested_by, requested_at DESC);
+
+-- ===== Phase 2: เงินมัดจำ (รับมัดจำจากใบเสนอราคา → ใบรับเงินมัดจำ/ใบกำกับภาษี; หักมัดจำตอนออกใบกำกับงวดสุดท้าย) =====
+-- type='deposit' = ใบรับเงินมัดจำ/ใบกำกับภาษี (คิด VAT บนยอดมัดจำ ณ วันรับเงิน) — subtotal = ฐานมัดจำก่อน VAT
+-- deposit_amount = เอกสารงวดสุดท้าย (invoice/taxinvoice/receipt): ยอดมัดจำ(ฐานก่อน VAT)ที่นำมาหักออกจากมูลค่างานเต็ม
+-- deposit_ref    = เลขที่ใบรับเงินมัดจำที่อ้างอิง (คั่นด้วย , หากมีหลายใบ)
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS deposit_amount numeric(14,2) NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS deposit_ref    text;
+
+-- ===== Phase 3: แบ่งจ่าย/แบ่งงวด (แยกใบเสนอราคา 1 ใบ เป็นใบวางบิล/ใบกำกับหลายงวด รวมทุกงวด = ยอดเต็ม) =====
+-- installment_no  = งวดที่ (0 = เอกสารปกติ ไม่ใช่งวด) · installment_pct = % ของมูลค่างาน (0 = ระบุเป็นยอด)
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS installment_no  int NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS installment_pct numeric(7,4) NOT NULL DEFAULT 0;
