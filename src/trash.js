@@ -17,7 +17,12 @@ const KEEP_DAYS = Math.max(1, Number(process.env.TRASH_KEEP_DAYS || 30));
 async function trashFile(ctx, info) {
   let t;
   try { t = await storage.trash(String(info.fileId)); }
-  catch (e) { fail('ย้ายไฟล์ไปถังขยะไม่สำเร็จ: ' + e.message); }
+  catch (e) {
+    // L4 (Security Review): อย่าส่ง path/รายละเอียดเทคนิคจาก error ดิบไปถึงผู้ใช้ — log พร้อมรหัสอ้างอิงแทน
+    const ref = Date.now().toString(36).slice(-6).toUpperCase();
+    console.error('[ERR trash ' + ref + ']', e);
+    fail('ย้ายไฟล์ไปถังขยะไม่สำเร็จ กรุณาลองใหม่ (รหัสอ้างอิง ' + ref + ')');
+  }
   const missing = !t;
   if (missing) t = { id: '', folder: info.folder || path.dirname(String(info.fileId || '')), name: info.fileName || path.basename(String(info.fileId || '')) };
   const comp = ctx.tenantId ? await ctx.one('SELECT company_name FROM tenants WHERE id = $1', [ctx.tenantId]) : null;

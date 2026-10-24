@@ -16,7 +16,7 @@ const { pool, withCtx } = require('./db');
 const storage = require('./storage');
 const hub = require('./hub');
 const { ZipWriter } = require('./zipwriter');
-const { fail, tsOut, safeFolderName } = require('./util');
+const { fail, tsOut, safeFolderName, csvCell, toCsv } = require('./util');
 const P = () => require('./platform');
 const PR = () => require('./print');
 
@@ -31,14 +31,6 @@ const TABLE_TH = { company_profiles: 'ข้อมูลบริษัท', doc
 const PROGRESS = new Map();   // id → { step, done, total }
 let CHAIN = Promise.resolve();  // สร้างทีละไฟล์ (PDF ใช้ Chromium หนัก)
 
-const csvCell = v => {
-  if (v == null) return '';
-  if (v instanceof Date) v = v.toISOString();
-  else if (Buffer.isBuffer(v)) v = '(ไฟล์)';
-  else if (typeof v === 'object') v = JSON.stringify(v);
-  v = String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
-};
-const toCsv = rows => { if (!rows.length) return '﻿'; const cols = Object.keys(rows[0]); return '﻿' + [cols.join(','), ...rows.map(r => cols.map(c => csvCell(r[c])).join(','))].join('\r\n'); };
 const stamp = d => d.toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok' }).replace(/[-: ]/g, '').slice(0, 12);
 const outRow = r => ({ id: String(r.id), tenantId: String(r.tenant_id), tenantName: r.tenant_name, status: r.status, fileName: r.file_name || '', size: Number(r.size) || 0,
   files: Number(r.files) || 0, createdName: r.created_name || '', createdAt: tsOut(r.created_at), readyAt: r.ready_at ? tsOut(r.ready_at) : '',
@@ -124,7 +116,11 @@ async function start(tenantId, tenantName, user, requestId, waitFor) {
   const r = (await pool.query(`INSERT INTO company_exports (tenant_id, tenant_name, status, created_by, created_name, request_id) VALUES ($1,$2,'building',$3,$4,$5) RETURNING id`,
     [tenantId, tenantName, user.id, String(user.displayName || user.display_name || user.username), requestId || null])).rows[0];
   const id = String(r.id); PROGRESS.set(id, { step: 'รอคิว', done: 0, total: 0 });
-  const p = CHAIN = CHAIN.then(() => build(id)).catch(() => {});
+  const p = CHAIN = CHAIN.then(() => build(id)).catch(async e => {
+    // error ใดๆ ที่หลุดจาก build (เช่น DB ชั่วคราวใน finally) → ห้ามค้างสถานะ 'building' มิฉะนั้นจะปิดกั้นการส่งออกของเจ้านี้จนรีสตาร์ท
+    console.error('company export chain:', e && e.stack || e);
+    await pool.query("UPDATE company_exports SET status = 'error', error = $2 WHERE id = $1 AND status = 'building'", [id, String((e && e.message) || e).slice(0, 500)]).catch(() => {});
+  });
   if (waitFor) { await p; const x = (await pool.query('SELECT * FROM company_exports WHERE id = $1', [id])).rows[0]; if (x.status !== 'ready') throw new Error('สร้างไฟล์ข้อมูลไม่สำเร็จ: ' + (x.error || '')); }
   return id;
 }

@@ -73,10 +73,10 @@ async function docItems(ctx, id) {
 async function findDoc(ctx, id) { return ctx.one('SELECT * FROM documents WHERE tenant_id = $1 AND id::text = $2', [ctx.tenantId, String(id || '')]); }
 
 // ---------- Phase 2: เงินมัดจำ ----------
-// ใบรับเงินมัดจำ (ยังไม่ยกเลิก) ทั้งหมดของใบเสนอราคาหนึ่ง — ฐานมัดจำรวม = ผลรวม subtotal (ก่อน VAT)
+// ใบรับเงินมัดจำ (สถานะ 'paid' เท่านั้น — ไม่นับใบวางบิลมัดจำที่ยังไม่ได้รับเงิน, ยกเลิกแล้วไม่นับ) ของใบเสนอราคาหนึ่ง — ฐานมัดจำรวม = ผลรวม subtotal (ก่อน VAT)
 async function depositsOfQuotation(ctx, quotationId) {
   // นับเอกสารมัดจำด้วย variant='deposit' (ออกเป็น type ได้หลายแบบ: ใบวางบิล/ใบกำกับ-ใบเสร็จ/เงินสด)
-  const rows = await ctx.all("SELECT id, number, date, subtotal, vat_amount, total FROM documents WHERE tenant_id = $1 AND variant = 'deposit' AND source_document_id = $2 AND status <> 'cancelled' ORDER BY date, number", [ctx.tenantId, String(quotationId)]);
+  const rows = await ctx.all("SELECT id, number, date, subtotal, vat_amount, total, status FROM documents WHERE tenant_id = $1 AND variant = 'deposit' AND source_document_id = $2 AND status = 'paid' ORDER BY date, number", [ctx.tenantId, String(quotationId)]);
   const base = round2(rows.reduce((s, r) => s + (Number(r.subtotal) || 0), 0));
   const vat = round2(rows.reduce((s, r) => s + (Number(r.vatAmount) || 0), 0));
   const paid = round2(rows.reduce((s, r) => s + (Number(r.total) || 0), 0));
@@ -226,7 +226,7 @@ async function deleteDocument(ctx, id) {
     fail('ลบไม่ได้: ใบเสนอราคานี้ออกเอกสารงวดที่หักมัดจำแล้ว กรุณายกเลิก/ลบเอกสารงวดนั้นก่อน');
   // เก็บเอกสารทั้งชุด + ไฟล์แนบ + PDF ไว้ในถังขยะ (Super Admin กู้คืนได้ภายใน 30 วัน)
   await require('./trash').trashRecord(ctx, { kind: 'document', table: 'documents', itemsTable: 'document_items', fk: 'document_id', id: d.id, number: d.number, docType: d.type, label: d.customerName });
-  await ctx.exec('DELETE FROM documents WHERE id = $1', [d.id]);   // รายการสินค้าถูกลบตาม (ON DELETE CASCADE)
+  await ctx.exec('DELETE FROM documents WHERE id = $1 AND tenant_id = $2', [d.id, ctx.tenantId]);   // รายการสินค้าถูกลบตาม (ON DELETE CASCADE) — ใส่ tenant condition ประกอบกัน ref ครั้งหน้าพลาด
   if (['receipt', 'taxinvoice'].includes(d.type) && d.sourceDocumentId) await syncInvoicePaidState(ctx, d.sourceDocumentId);
   await ctx.log(d.id, 'DELETE', d.number + ' / ' + d.type + ' / ' + d.status + ' / ยอดสุทธิ ' + d.total);
   return { success: true };
@@ -273,7 +273,8 @@ async function saveDocument(ctx, input) {
 
   let status = clean(input.status || 'draft', 30);
   if (!['draft', 'pending', 'approved', 'issued', 'paid', 'rejected', 'cancelled'].includes(status)) fail('สถานะไม่ถูกต้อง');
-  // Phase 1: ใบเสนอราคาที่สร้างใหม่ เริ่มที่ "รออนุมัติ" (pending)
+  // Phase 1: ใบเสนอราคาที่สร้างใหม่ เริ่มที่ "รออนุมัติ" (pending) — ห้ามส่งสถานะเกินกว่านี้มาตอนสร้าง (กันผู้สร้างอนุมัติตัวเองทันที)
+  if (!old && input.type === 'quotation' && !['draft', 'pending'].includes(status)) status = 'pending';
   if (!old && input.type === 'quotation' && (status === 'draft' || !input.status)) status = 'pending';
   if (PAID_TYPES.includes(input.type)) status = (old && status === 'cancelled') ? 'cancelled' : 'paid';
   if (!STATUS_BY_TYPE[input.type].includes(status) && !(old && status === prevStatus)) fail('สถานะนี้ใช้กับเอกสารประเภทนี้ไม่ได้');
@@ -314,6 +315,9 @@ async function saveDocument(ctx, input) {
   if (old && ['issued', 'paid'].includes(prevStatus) && changes.length) {
     Object.assign(record, { editCount: (Number(old.editCount) || 0) + 1, lastEditReason: reason, lastEditedAt: new Date(), lastEditedBy: ctx.username() });
   }
+  // Security Review M1: แก้ "เนื้อหา" ใบเสนอราคาที่เคยอนุมัติแล้ว → ตีกลับเป็น รออนุมัติอัตโนมัติ (ต้องได้รับอนุมัติใหม่ก่อนจึงออกเอกสารต่อได้)
+  const reapprove = !!(old && input.type === 'quotation' && prevStatus === 'approved' && changes.length && status === 'approved');
+  if (reapprove) { status = record.status = 'pending'; record.updatedAt = new Date(); }
   if (old) { await ctx.update('documents', id, record); await ctx.exec('DELETE FROM document_items WHERE document_id = $1', [id]); }
   else await ctx.insert('documents', record);
   await ctx.insertMany('document_items', items);
@@ -508,33 +512,41 @@ async function getSummary(ctx, opts) {
   opts = opts || {};
   const { expStatusOf } = require('./modules');
   const thisYear = yearNow(), year = Number(opts.year) || thisYear, month = Number(opts.month) || 0;
+  if (!Number.isInteger(year) || year < 1990 || year > 2200) fail('ปีที่ระบุไม่ถูกต้อง');
+  const mo = Number.isInteger(month) && month >= 1 && month <= 12 ? month : 0;
+  const pad2 = n => String(n).padStart(2, '0');
+  const periodFrom = year + '-' + pad2(mo || 1) + '-01';
+  const periodTo = mo ? (mo === 12 ? (year + 1) + '-01-01' : year + '-' + pad2(mo + 1) + '-01') : (year + 1) + '-01-01';
   const type = (SALES_TYPES.includes(opts.type) || opts.type === 'expense' || opts.type === 'product') ? opts.type : 'invoice';
   const mode = ['all', 'issued', 'paid'].includes(opts.status) ? opts.status : 'all';
   const cust = clean(opts.customer, 250);
   const years = new Set([thisYear, year]), names = new Set(), rows = [];
-  const inPeriod = date => { const y = Number(date.slice(0, 4)); if (y) years.add(y); return y === year && (!month || Number(date.slice(5, 7)) === month); };
+  const inPeriod = date => Number(String(date).slice(0, 4)) === year && (!mo || Number(String(date).slice(5, 7)) === mo);
   if (type === 'expense') {
     const catBy = {};   // หมวดหมู่ตามรายการ (เหมือนหน้ารายการค่าใช้จ่าย)
     for (const i of await ctx.all("SELECT ei.expense_id, ei.category FROM expense_items ei JOIN expenses e ON e.id = ei.expense_id WHERE e.tenant_id = $1", [ctx.tenantId])) {
       const k = String(i.expenseId); if (i.category) (catBy[k] = catBy[k] || new Set()).add(String(i.category));
     }
-    for (const e of await ctx.all('SELECT * FROM expenses WHERE tenant_id = $1', [ctx.tenantId])) {
-      const date = dateOut(e.date), st = expStatusOf(e.status), per = inPeriod(date);
+    for (const r of await ctx.all("SELECT DISTINCT btrim(vendor_name) AS n FROM expenses WHERE tenant_id = $1 AND status <> 'cancelled' AND btrim(vendor_name) <> ''", [ctx.tenantId])) names.add(String(r.n));
+    for (const r of await ctx.all("SELECT DISTINCT EXTRACT(YEAR FROM date)::int AS y FROM expenses WHERE tenant_id = $1 AND status <> 'cancelled'", [ctx.tenantId])) if (r.y) years.add(Number(r.y));
+    for (const e of await ctx.all("SELECT * FROM expenses WHERE tenant_id = $1 AND date >= $2::date AND date < $3::date", [ctx.tenantId, periodFrom, periodTo])) {
+      const date = dateOut(e.date), st = expStatusOf(e.status);
       if (st === 'cancelled') continue;
       const name = String(e.vendorName || '').trim();
       if (name) names.add(name);
-      if (!per || (mode === 'paid' && st !== 'paid') || (cust && name !== cust)) continue;
+      if (!inPeriod(date) || (mode === 'paid' && st !== 'paid') || (cust && name !== cust)) continue;
       const total = Number(e.total) || 0, wht = Number(e.whtAmount) || 0;
       rows.push({ id: String(e.id), number: String(e.number), date, customerName: name, category: String(e.category || ''), categories: catBy[String(e.id)] ? [...catBy[String(e.id)]] : [String(e.category || 'อื่นๆ')], status: st, net: Number(e.amountBeforeVat) || 0,
         vat: Number(e.vatAmount) || 0, total, whtRate: Number(e.whtRate) || 0, wht, payable: round2(total - wht) });
     }
   } else if (type === 'product') {
-    const docs = await ctx.all("SELECT * FROM documents WHERE tenant_id = $1 AND type IN ('receipt','cashsale') AND status <> 'cancelled'", [ctx.tenantId]);
+    for (const r of await ctx.all("SELECT DISTINCT btrim(customer_name) AS n FROM documents WHERE tenant_id = $1 AND type IN ('receipt','cashsale') AND status <> 'cancelled' AND btrim(customer_name) <> ''", [ctx.tenantId])) names.add(String(r.n));
+    for (const r of await ctx.all("SELECT DISTINCT EXTRACT(YEAR FROM date)::int AS y FROM documents WHERE tenant_id = $1 AND type IN ('receipt','cashsale') AND status <> 'cancelled'", [ctx.tenantId])) if (r.y) years.add(Number(r.y));
+    const docs = await ctx.all("SELECT * FROM documents WHERE tenant_id = $1 AND type IN ('receipt','cashsale') AND status <> 'cancelled' AND date >= $2::date AND date < $3::date", [ctx.tenantId, periodFrom, periodTo]);
     const itemsBy = {};
-    (await ctx.all('SELECT * FROM document_items WHERE tenant_id = $1 ORDER BY line_no', [ctx.tenantId])).forEach(i => { (itemsBy[String(i.documentId)] = itemsBy[String(i.documentId)] || []).push(i); });
+    if (docs.length) (await ctx.all('SELECT * FROM document_items WHERE tenant_id = $1 AND document_id = ANY($2::uuid[]) ORDER BY line_no', [ctx.tenantId, docs.map(d => String(d.id))])).forEach(i => { (itemsBy[String(i.documentId)] = itemsBy[String(i.documentId)] || []).push(i); });
     docs.forEach(d => {
       const date = dateOut(d.date), per = inPeriod(date), name = String(d.customerName || '').trim();
-      if (name) names.add(name);
       if (!per || (mode === 'paid' && d.status !== 'paid') || (cust && name !== cust)) return;
       const sub = Number(d.subtotal) || 0; if (sub <= 0) return;
       const k = (sub - (Number(d.discount) || 0)) / sub, vk = (Number(d.vatAmount) || 0) / sub;
@@ -545,15 +557,13 @@ async function getSummary(ctx, opts) {
       });
     });
   } else {
-    for (const d of await ctx.all('SELECT * FROM documents WHERE tenant_id = $1', [ctx.tenantId])) {
+    for (const r of await ctx.all("SELECT DISTINCT btrim(customer_name) AS n FROM documents WHERE tenant_id = $1 AND status <> 'cancelled' AND btrim(customer_name) <> ''", [ctx.tenantId])) names.add(String(r.n));
+    for (const r of await ctx.all("SELECT DISTINCT EXTRACT(YEAR FROM date)::int AS y FROM documents WHERE tenant_id = $1", [ctx.tenantId])) if (r.y) years.add(Number(r.y));
+    for (const d of await ctx.all("SELECT * FROM documents WHERE tenant_id = $1 AND type = $2 AND date >= $3::date AND date < $4::date", [ctx.tenantId, type, periodFrom, periodTo])) {
       const date = dateOut(d.date), per = inPeriod(date);
       if (d.status === 'cancelled') continue;
       const name = String(d.customerName || '').trim();
-      if (name) names.add(name);
-      if (d.type !== type) continue;
-      if (mode === 'issued' && !['issued', 'paid'].includes(d.status)) continue;
-      if (mode === 'paid' && d.status !== 'paid') continue;
-      if (!per || (cust && name !== cust)) continue;
+      if (!per || (mode === 'issued' && !['issued', 'paid'].includes(d.status)) || (mode === 'paid' && d.status !== 'paid') || (cust && name !== cust)) continue;
       const net = round2((Number(d.subtotal) || 0) - (Number(d.discount) || 0) - (Number(d.depositAmount) || 0));
       const wr = Number(d.whtRate) || 0, wht = round2(net * wr / 100), total = Number(d.total) || 0;
       rows.push({ id: String(d.id), number: String(d.number), date, customerName: name, status: String(d.status), net, vat: Number(d.vatAmount) || 0, total, whtRate: wr, wht, payable: round2(total - wht) });

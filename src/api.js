@@ -22,6 +22,8 @@ const ping = async () => ({ ok: true });
 // [ฟังก์ชัน, สิทธิ์ขั้นต่ำ, ต้องเลือกบริษัท?, ใช้ได้แม้ License หมดอายุ?]
 const TABLE = {
   getSession: [P.getSession, 'viewer', false, true],
+  logout: [P.logout, 'viewer', false, true],
+  chatStreamTicket: [P.streamTicket, 'viewer', false, true],   // ตั๋วใช้ครั้งเดียวสำหรับ EventSource (กัน token ค้างใน log)
   ping: [ping, 'viewer', false, true],
   redeemLicenseKey: [P.redeemLicenseKey, 'viewer', false, true],
   // แชทติดต่อเจ้าหน้าที่

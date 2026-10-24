@@ -35,7 +35,9 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:?กรุณาตั้ง POSTGRES_PASSWORD ในไฟล์ .env}
       PGDATABASE: ${POSTGRES_DB:-docflow}
       ACCESS_KEY: ${ACCESS_KEY:-}
-      TOKEN_SECRET: ${TOKEN_SECRET:-}
+      TOKEN_SECRET: ${TOKEN_SECRET:?ต้องตั้ง TOKEN_SECRET ในไฟล์ .env — สร้างด้วย: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"}
+      BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE:-}
+      BOOTSTRAP_ADMIN_KEY: ${BOOTSTRAP_ADMIN_KEY:-}
       SESSION_HOURS: ${SESSION_HOURS:-12}
       LOCK_ISSUED_DOCS: ${LOCK_ISSUED_DOCS:-true}
       STORAGE_DIR: /app/Storage
@@ -113,6 +115,7 @@ services:
       TZ: Asia/Bangkok
       BACKUP_ALL_CRON: ${BACKUP_ALL_CRON:-30 2 * * *}
       BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-30}
+      BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE:?ต้องตั้ง BACKUP_PASSPHRASE ในไฟล์ .env เพื่อเข้ารหัสไฟล์สำรอง}
       RCLONE_REMOTE: ${RCLONE_REMOTE:-}
     volumes:
       - ${STORAGE_LOCAL_DIR:-./Storage}:/storage:ro

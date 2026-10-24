@@ -13,6 +13,10 @@ DEST=${BACKUP_DIR:-/backups}
 STORAGE=${STORAGE_SRC:-/storage}
 CONF=${CONFIG_DIR:-/config}
 RCONF=${RCLONE_CONFIG_FILE:-/backup-config/rclone.conf}
+# Security Review 2.1: ไฟล์สำรองมีฐานข้อมูลเต็ม + .env (รหัสผ่านจริง) → ต้องเข้ารหัสเสมอ
+if [ -z "$BACKUP_PASSPHRASE" ]; then
+  echo "[backup] ผิดพลาด: ยังไม่ได้ตั้ง BACKUP_PASSPHRASE ใน .env — การสำรองทั้งระบบปฏิเสธการทำงาน (ไฟล์สำรองมีรหัสผ่าน/ข้อมูลลูกค้าอยู่)"; exit 1
+fi
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 echo "[backup] เริ่มสำรองข้อมูล $STAMP"
@@ -22,16 +26,20 @@ PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -h "${PGHOST:-db}" -p "${PGPORT:-5432}" 
 [ -f "$CONF/.env" ] && cp "$CONF/.env" "$TMP/env.txt" || true
 [ -f "$CONF/docker-compose.yml" ] && cp "$CONF/docker-compose.yml" "$TMP/docker-compose.yml" || true
 cat > "$TMP/README.txt" <<TXT
-DocFlow backup $STAMP
+DocFlow backup $STAMP  (เข้ารหัส AES-256-CBC + pbkdf2 ด้วย BACKUP_PASSPHRASE จาก .env)
+- วิธีแกะ:  openssl enc -d -aes-256-cbc -pbkdf2 -md sha512 -pass 'env:BACKUP_PASSPHRASE' -in ไฟล์.tar.gz.enc | tar xzf - -C ปลายทาง
 - database.dump       ฐานข้อมูล (กู้คืนด้วย pg_restore หรือ scripts/restore-all.sh)
-- env.txt             ไฟล์ .env (มีรหัสผ่าน เก็บให้ปลอดภัย)
+- env.txt             ไฟล์ .env (มีรหัสผ่าน — ทั้ง archive ถูกเข้ารหัสแล้ว)
 - docker-compose.yml  ไฟล์ตั้งค่า Docker
 ไฟล์ใน Storage อยู่ในโฟลเดอร์ Storage/ ข้างโฟลเดอร์ daily/
 TXT
 mkdir -p "$DEST/daily"
-ARCH="$DEST/daily/docflow-$STAMP.tar.gz"
-tar -czf "$ARCH" -C "$TMP" .
-echo "[backup] ฐานข้อมูล → $ARCH ($(du -h "$ARCH" | cut -f1))"
+TARF="$TMP/payload.tar.gz"
+tar -czf "$TARF" -C "$TMP" .
+ARCH="$DEST/daily/docflow-$STAMP.tar.gz.enc"
+openssl enc -aes-256-cbc -pbkdf2 -md sha512 -salt -pass env:BACKUP_PASSPHRASE -in "$TARF" -out "$ARCH"
+rm -f "$TARF"
+echo "[backup] ฐานข้อมูล+config (เข้ารหัสแล้ว) → $ARCH ($(du -h "$ARCH" | cut -f1))"
 
 # 2) Storage (ไม่รวม 03 สำรองข้อมูล ซึ่งเป็นสำรอง JSON ของระบบอยู่แล้ว)
 mkdir -p "$DEST/Storage"
@@ -39,8 +47,8 @@ rclone copy "$STORAGE" "$DEST/Storage" --exclude "/03 สำรองข้อ�
 echo "[backup] Storage → $DEST/Storage"
 
 # 3) ลบชุดรายวันที่เก่าเกินกำหนด (เก็บชุดวันที่ 1 ของเดือนไว้ 365 วัน)
-find "$DEST/daily" -name 'docflow-*.tar.gz' ! -name 'docflow-*-01_*' -mtime +"$KEEP" -delete 2>/dev/null || true
-find "$DEST/daily" -name 'docflow-*.tar.gz' -mtime +365 -delete 2>/dev/null || true
+find "$DEST/daily" -name 'docflow-*.tar.gz.enc' ! -name 'docflow-*-01_*' -mtime +"$KEEP" -delete 2>/dev/null || true
+find "$DEST/daily" -name 'docflow-*.tar.gz.enc' -mtime +365 -delete 2>/dev/null || true
 
 # 4) ส่งขึ้นที่เก็บนอกเครื่อง (Google Drive ฯลฯ)
 if [ -n "$RCLONE_REMOTE" ]; then

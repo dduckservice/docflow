@@ -755,6 +755,7 @@ window.addEventListener('unhandledrejection',function(e){var b=document.getEleme
 <div class="field"><label>ชื่อผู้ใช้ หรืออีเมล</label><input id="lgUser" maxlength="200" autocomplete="username" autocapitalize="none"></div>
 <div class="field"><label>รหัสผ่าน</label><input id="lgPass" type="password" autocomplete="current-password"></div>
 <div class="field setup-only hidden"><label>ยืนยันรหัสผ่าน</label><input id="lgPass2" type="password" autocomplete="new-password"></div>
+<div class="field setup-only hidden" id="lgKeyWrap"><label>รหัสยืนยันการตั้งค่า (BOOTSTRAP_ADMIN_KEY จากไฟล์ .env ของเซิร์ฟเวอร์)</label><input id="lgBootKey" maxlength="120" autocomplete="off"></div>
 <div class="loginerr" id="loginErr"></div>
 <button class="btn primary" id="lgBtn" type="submit" style="width:100%">เข้าสู่ระบบ</button>
 <div class="lgswitch hidden" id="lgToSignup">ยังไม่มีบัญชี? <a href="#" onclick="showSignup(true);return false">สมัครใช้งานฟรี</a></div>
@@ -1804,15 +1805,15 @@ function renderDash(){
 
 /* ===== ผู้ใช้ / หลายบริษัท ===== */
 const roleTh={admin:'ผู้ดูแลระบบ',audit:'ผู้ตรวจสอบ (Admin Audit)',staff:'พนักงาน',viewer:'ดูอย่างเดียว'};
-let CO_LIST=[],TOKEN='',TENANT='',SESSION=null,setupMode=false,users=[],allTenants=[],company=null;
+let CO_LIST=[],TOKEN='',TENANT='',SESSION=null,setupMode=false,setupKeyReq=false,users=[],allTenants=[],company=null;
 const store={get(k){try{return localStorage.getItem(k)||''}catch(e){return ''}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
-function renderLoginMode(){document.querySelectorAll('.setup-only').forEach(x=>x.classList.toggle('hidden',!setupMode));document.querySelectorAll('.setup-hide').forEach(x=>x.classList.toggle('hidden',setupMode));$('lgTitle').textContent=setupMode?'ตั้งค่าผู้ดูแลระบบคนแรก':'เข้าสู่ระบบ';$('lgSub').textContent=setupMode?'ยังไม่มีผู้ใช้ในระบบ สร้างบัญชีผู้ดูแลเพื่อเริ่มใช้งาน (รหัสผ่านอย่างน้อย 8 ตัวอักษร)':'ระบบจัดการเอกสารธุรกิจ';$('lgBtn').textContent=setupMode?'สร้างบัญชีและเข้าสู่ระบบ':'เข้าสู่ระบบ'}
+function renderLoginMode(){document.querySelectorAll('.setup-only').forEach(x=>x.classList.toggle('hidden',!setupMode));document.querySelectorAll('.setup-hide').forEach(x=>x.classList.toggle('hidden',setupMode));$('lgKeyWrap').classList.toggle('hidden',!(setupMode&&setupKeyReq));$('lgTitle').textContent=setupMode?'ตั้งค่าผู้ดูแลระบบคนแรก':'เข้าสู่ระบบ';$('lgSub').textContent=setupMode?'ยังไม่มีผู้ใช้ในระบบ สร้างบัญชีผู้ดูแลเพื่อเริ่มใช้งาน (รหัสผ่านอย่างน้อย 8 ตัวอักษร)':'ระบบจัดการเอกสารธุรกิจ';$('lgBtn').textContent=setupMode?'สร้างบัญชีและเข้าสู่ระบบ':'เข้าสู่ระบบ'}
 function bootDone(){const b=document.getElementById('bootMsg');if(b)b.remove()}
 async function showLogin(){
   ROUTE_LOCK=false;
   bootDone();
   $('app').classList.add('hidden');$('loginView').classList.remove('hidden');$('loginErr').textContent='';
-  try{const a=await pub('authStatus');setupMode=!!a.needsSetup;ALLOW_SIGNUP=!!a.allowSignup;TRIAL_DAYS=a.trialDays||7}catch(e){setupMode=false;ALLOW_SIGNUP=false;$('loginErr').textContent='เชื่อมต่อระบบไม่ได้: '+e.message}
+  try{const a=await pub('authStatus');setupMode=!!a.needsSetup;setupKeyReq=!!a.setupKeyRequired;ALLOW_SIGNUP=!!a.allowSignup;TRIAL_DAYS=a.trialDays||7}catch(e){setupMode=false;setupKeyReq=false;ALLOW_SIGNUP=false;$('loginErr').textContent='เชื่อมต่อระบบไม่ได้: '+e.message}
   renderLoginMode();$('lgToSignup').classList.toggle('hidden',setupMode||!ALLOW_SIGNUP);$('suSub').textContent='ทดลองใช้งานได้ครบทุกฟังก์ชัน '+TRIAL_DAYS+' วัน ไม่ต้องใช้บัตรเครดิต';showSignup(false);
 }
 async function doLogin(ev){
@@ -1822,7 +1823,7 @@ async function doLogin(ev){
   const btn=$('lgBtn');btn.disabled=true;
   try{
     let s;
-    if(setupMode){if(p!==$('lgPass2').value)throw Error('รหัสผ่านสองช่องไม่ตรงกัน');s=await pub('createFirstAdmin',u,p,$('lgName').value.trim()||u)}
+    if(setupMode){if(p!==$('lgPass2').value)throw Error('รหัสผ่านสองช่องไม่ตรงกัน');s=await pub('createFirstAdmin',u,p,$('lgName').value.trim()||u,setupKeyReq?$('lgBootKey').value:'')}
     else s=await pub('login',u,p);
     $('lgPass').value='';$('lgPass2').value='';
     await enter(s);
@@ -1932,6 +1933,7 @@ async function editCompany(id){
 }
 function logout(expired){
   try{store.del(routeKey())}catch(e){}
+  if(TOKEN&&!expired){try{fetch('api/logout',{method:'POST',headers:{Authorization:'Bearer '+TOKEN}}).catch(()=>{})}catch(e){}}   // Security Review: ยกเลิกเซสชันฝั่งเซิร์ฟเวอร์ด้วย (ยกกรณีหมดอายุที่ token ตายอยู่แล้ว)
   chatStop();$('expView').classList.add('hidden');
   TOKEN='';SESSION=null;store.del('docflowToken');closeAccount();docs=[];
   if(expired)toast('เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่');
@@ -3295,11 +3297,12 @@ function notifAsk(){try{if('Notification' in window&&Notification.permission==='
 function deskNotify(title,body){try{if(document.hidden&&'Notification' in window&&Notification.permission==='granted'){const n=new Notification(title,{body,icon:'favicon.png',tag:'docflow-chat'});n.onclick=()=>{window.focus();n.close();if(SESSION&&SESSION.isSuper)openInbox(document.querySelector('[onclick^="openInbox"]'));else chatToggle(true)}}}catch(e){}}
 const BASE_TITLE=document.title;let TITLE_N=0;
 function titleCount(n){TITLE_N=n||0;document.title=(TITLE_N?'('+TITLE_N+') ':'')+BASE_TITLE}
-function chStream(){
+async function chStream(){
   chStreamStop();if(!TOKEN||!window.EventSource)return;
-  const es=new EventSource('api/chat/stream?token='+encodeURIComponent(TOKEN));CH.es=es;
+  let url;try{const r=await call('chatStreamTicket');if(!r||!r.url)return;url=r.url}catch(e){return}   // Security Review M9: ใช้ ticket ใช้ครั้งเดียวแทนการเอา token ไปใส่ query
+  const es=new EventSource(url);CH.es=es;
   es.onmessage=e=>{let d;try{d=JSON.parse(e.data)}catch(x){return}chOnEvent(d)};
-  es.onerror=()=>{if(es.readyState===2){CH.es=null;setTimeout(()=>{if(TOKEN&&SESSION&&!CH.es)chStream()},15000)}};
+  es.onerror=()=>{try{es.close()}catch(x){}if(CH.es===es)CH.es=null;if(TOKEN&&SESSION)setTimeout(()=>{if(TOKEN&&SESSION&&!CH.es)chStream()},5000)};   // ticket ใช้ครั้งเดียว → ตัดแล้วสร้างใหม่พร้อม ticket ใหม่เสมอ
 }
 function chStreamStop(){if(CH.es){try{CH.es.close()}catch(e){}CH.es=null}}
 async function chOnEvent(d){
@@ -3645,7 +3648,7 @@ function bkJobRender(j){
 }
 async function bkPoll(){
   clearTimeout(BK_T);if(!BK_JOB)return;
-  let j=null;try{const r=await fetch('api/backup/job/'+BK_JOB,{cache:'no-store'});if(r.ok)j=await r.json()}catch(e){}
+  let j=null;try{const r=await fetch('api/backup/job/'+BK_JOB,{cache:'no-store',headers:TOKEN?{Authorization:'Bearer '+TOKEN}:{}});if(r.ok)j=await r.json()}catch(e){}
   if(j){bkJobRender(j);if(j.state!=='running'){BK_JOB='';if(j.type==='restore'&&j.state==='done'){$('maintOv').classList.add('hidden');return}await bkLoad(true);toast(j.state==='done'?(j.type==='restore'?'กู้คืนข้อมูลสำเร็จ':'สำรองข้อมูลสำเร็จ'):'ไม่สำเร็จ: '+(j.error||''));return}}
   BK_T=setTimeout(bkPoll,800);
 }

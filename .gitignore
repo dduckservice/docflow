@@ -1,0 +1,23 @@
+# ===== ความลับและข้อมูลผู้ใช้ — ห้าม commit เด็ดขาด (Security Review C1) =====
+.env
+.env.*
+!.env.example
+!env.example
+
+# ฐานข้อมูล/ไฟล์สำรองจริง — ต้องอยู่คนละที่กับโค้ด (อย่าเอากลับมา commit อีก)
+Backups/
+Storage/
+db/*.sql.gz
+*.tar
+*.tar.gz
+*.enc
+
+# ===== ระบบปฏิบัติการ/ตัวแปร temp =====
+.DS_Store
+Thumbs.db
+node_modules/
+npm-debug.log*
+*.log
+tmp/
+*.part
+.restore-*

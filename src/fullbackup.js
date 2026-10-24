@@ -1,15 +1,15 @@
 // ============================================================
 //  fullbackup.js — สำรอง / กู้คืนข้อมูลทั้งระบบจากหน้าเว็บ (เฉพาะ Super Admin)
 //
-//  ไฟล์สำรอง 1 ชุด = 1 ไฟล์ .tar ในโฟลเดอร์ Backups/full บนเครื่องเซิร์ฟเวอร์
+//  ไฟล์สำรอง 1 ชุด = 1 ไฟล์ .tar ในโฟลเดอร์ Backups/full บนเครื่องเซิร์ฟเวอร์ (รูปแบบ v2 · Security Review 2.1)
 //    docflow-2026-10-22_193000-manual.tar
-//      ├─ manifest.json      รายละเอียดชุดสำรอง (เวลา ผู้สร้าง จำนวนข้อมูล checksum)
-//      ├─ database.json.gz   ข้อมูลทุกตารางในฐานข้อมูล
+//      ├─ manifest.json      รายละเอียดชุดสำรอง (เวลา ผู้สร้าง จำนวนข้อมูล checksum บังคับทุกไฟล์)
+//      ├─ database.enc       ข้อมูลทุกตารางในฐานข้อมูล — เข้ารหัส AES-256-GCM ด้วย BACKUP_PASSPHRASE จาก .env
 //      └─ storage.tar.gz     ไฟล์ทั้งหมดในโฟลเดอร์ Storage (PDF, ไฟล์อัปโหลด, ไฟล์แชท, ถังขยะ)
+//  ไฟล์ v1 เก่า (database.json.gz ไม่เข้ารหัส) ยัง กู้คืน ได้พร้อมคำเตือน — ควรสร้างชุดใหม่ทิ้ง
 //  คัดลอกไฟล์ .tar ลงแฟลชไดรฟ์ได้เลย · จะกู้คืนจากแฟลชไดรฟ์: คัดลอกไฟล์กลับมาไว้ใน Backups/full แล้วกดกู้คืนในหน้าเว็บ
-//
-//  กู้คืน: ตรวจไฟล์ → สำรองข้อมูลปัจจุบันก่อน (กันพลาด) → ปิดระบบชั่วคราว → แตกไฟล์ → นำเข้าฐานข้อมูล (transaction เดียว
-//  ถ้าพังกลางทางข้อมูลเดิมไม่เปลี่ยน) → สลับโฟลเดอร์ Storage → เปิดระบบ · ทุกขั้นตอนบันทึกเป็น log
+//  การกู้คืน: ตรวจไฟล์ (checksum บังคับ + ห้าม symlink/อุปกรณ์ใน archive) → ปิดระบบชั่วคราว → สำรองปัจจุบันก่อน → แตกไฟล์ → นำเข้า
+//  (ถ้าพังกลางทางข้อมูลเดิมไม่เปลี่ยน) → สลับโฟลเดอร์ Storage → เปิดระบบ · ทุกขั้นตอนบันทึกเป็น log
 // ============================================================
 const fs = require('fs');
 const fsp = fs.promises;
@@ -20,6 +20,7 @@ const { spawn } = require('child_process');
 const { pipeline } = require('stream/promises');
 const { pool } = require('./db');
 const { exportAll, importAll, TABLES } = require('./backup');
+const CB = require('./cryptbox');
 const hub = require('./hub');
 const { fail, tsOut } = require('./util');
 
@@ -88,6 +89,13 @@ const stampOf = d => { const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'A
 const rmrf = p => fsp.rm(p, { recursive: true, force: true }).catch(() => {});
 function safeName(name) { name = path.basename(String(name || '')); if (!NAME_RE.test(name)) fail('ชื่อไฟล์สำรองไม่ถูกต้อง'); return name; }
 
+// ---------- ความปลอดภัยตอนแตกไฟล์สำรอง: ใช้ tarsafe (มี unit test ใน test/tarsafe.test.js) ----------
+const { assertTypes, assertPaths } = require('./tarsafe');
+async function assertTarSafe(file, gz) {
+  assertTypes((await runOut('tar', ['-tv' + (gz ? 'z' : '') + 'f', file])).toString('utf8'));
+  assertPaths((await runOut('tar', ['-t' + (gz ? 'z' : '') + 'f', file])).toString('utf8'));
+}
+
 // ---------- สร้างไฟล์สำรอง ----------
 async function doBackup(job, kind, note) {
   await fsp.mkdir(DIR, { recursive: true });
@@ -106,9 +114,12 @@ async function doBackup(job, kind, note) {
       data = await exportAll(c); await c.query('COMMIT');
     } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
     const counts = {}; for (const t of TABLES) counts[t] = (data.tables[t] || []).length;
-    await fsp.writeFile(path.join(work, 'database.json.gz'), zlib.gzipSync(Buffer.from(JSON.stringify(data))));
+    // v2 (Security Review): เข้ารหัสไฟล์ฐานข้อมูลใน archive ด้วย BACKUP_PASSPHRASE — สำรองหลุดไปก็อ่านไม่ออก
+    const pass = String(process.env.BACKUP_PASSPHRASE || '').trim();
+    if (!pass) throw new Error('ยังไม่ได้ตั้งค่า BACKUP_PASSPHRASE (รหัสสำหรับเข้ารหัสไฟล์สำรอง) ในไฟล์ .env — ดูคำแนะนำใน README หัวข้อ การสำรองข้อมูล');
+    await fsp.writeFile(path.join(work, 'database.enc'), CB.encrypt(zlib.gzipSync(Buffer.from(JSON.stringify(data))), pass));
     data = null;
-    const dbSize = (await fsp.stat(path.join(work, 'database.json.gz'))).size;
+    const dbSize = (await fsp.stat(path.join(work, 'database.enc'))).size;
     log(job, `ฐานข้อมูล: บริษัท ${counts.tenants} · ผู้ใช้ ${counts.users} · เอกสาร ${counts.documents} · ค่าใช้จ่าย ${counts.expenses} (${mb(dbSize)})`, 'detail');
 
     log(job, `สำรองไฟล์ใน Storage (${st.files} ไฟล์)`);
@@ -118,12 +129,12 @@ async function doBackup(job, kind, note) {
 
     log(job, 'ตรวจสอบความถูกต้องและรวมเป็นไฟล์เดียว');
     const now = new Date(), name = `docflow-${stampOf(now)}-${kind}.tar`;
-    const manifest = { app: 'docflow', format: 1, kind, note: String(note || '').slice(0, 200), createdAt: now.toISOString(), createdBy: job.by,
+    const manifest = { app: 'docflow', format: 2, encrypted: true, kind, note: String(note || '').slice(0, 200), createdAt: now.toISOString(), createdBy: job.by,
       tables: counts, storage: { files: st.files, bytes: st.bytes },
-      sha256: { 'database.json.gz': await sha256(path.join(work, 'database.json.gz')), 'storage.tar.gz': await sha256(path.join(work, 'storage.tar.gz')) } };
+      sha256: { 'database.enc': await sha256(path.join(work, 'database.enc')), 'storage.tar.gz': await sha256(path.join(work, 'storage.tar.gz')) } };
     await fsp.writeFile(path.join(work, 'manifest.json'), JSON.stringify(manifest, null, 2));
     const part = path.join(DIR, name + '.part');
-    await run('tar', ['-cf', part, '-C', work, 'manifest.json', 'database.json.gz', 'storage.tar.gz']);
+    await run('tar', ['-cf', part, '-C', work, 'manifest.json', 'database.enc', 'storage.tar.gz']);
     await fsp.rename(part, path.join(DIR, name));
     const size = (await fsp.stat(path.join(DIR, name))).size;
     job.file = name; MAN_CACHE.delete(name);
@@ -172,30 +183,43 @@ function startRestore(by, name) {
     try {
       await rmrf(work); await fsp.mkdir(work, { recursive: true });
       log(job, 'ตรวจสอบไฟล์สำรอง');
+      await assertTarSafe(file, false);   // ดูรายชื่อก่อนแตก: ต้องมีเฉพาะไฟล์/โฟลเดอร์ปกติ path สัมพัทธ์
       try { await run('tar', ['-xf', file, '-C', work]); } catch (e) { throw new Error('ไฟล์สำรองเสียหายหรือไม่ใช่ไฟล์สำรองของ DocFlow (เปิดไฟล์ไม่ได้) — ถ้าคัดลอกมาจากแฟลชไดรฟ์ ลองคัดลอกใหม่'); }
       let m; try { m = JSON.parse(await fsp.readFile(path.join(work, 'manifest.json'), 'utf8')); } catch (e) { throw new Error('ไม่ใช่ไฟล์สำรองของ DocFlow (ไม่มี manifest.json)'); }
       if (m.app !== 'docflow') throw new Error('ไม่ใช่ไฟล์สำรองของ DocFlow');
-      for (const f of ['database.json.gz', 'storage.tar.gz']) {
+      const dbm = Number(m.format) >= 2 ? 'database.enc' : 'database.json.gz';
+      for (const f of [dbm, 'storage.tar.gz']) {
         if (!fs.existsSync(path.join(work, f))) throw new Error('ไฟล์สำรองไม่ครบ (ไม่พบ ' + f + ')');
-        if (m.sha256 && m.sha256[f] && m.sha256[f] !== await sha256(path.join(work, f))) throw new Error('ไฟล์สำรองเสียหาย (' + f + ' ไม่ตรงกับ checksum) — ลองคัดลอกไฟล์จากแฟลชไดรฟ์ใหม่');
+        if (!m.sha256 || !/^[0-9a-f]{64}$/.test(String(m.sha256[f] || ''))) throw new Error('ไฟล์สำรองไม่มี checksum ของ ' + f + ' (ถูกแก้ไข/เก่าเกินไป) — ไม่สามารถกู้คืนอย่างปลอดภัย');
+        if (m.sha256[f] !== await sha256(path.join(work, f))) throw new Error('ไฟล์สำรองเสียหาย (' + f + ' ไม่ตรงกับ checksum) — ลองคัดลอกไฟล์จากแฟลชไดรฟ์ใหม่');
       }
+      await assertTarSafe(path.join(work, 'storage.tar.gz'), true);
+      if (Number(m.format) < 2) log(job, 'คำเตือน: ชุดสำรองเก่า (รูปแบบ v1 ฐานข้อมูลไม่เข้ารหัส) — แนะนำให้สร้างชุดใหม่แล้วลบชุดนี้', 'detail');
       log(job, `ไฟล์สมบูรณ์ · สร้างเมื่อ ${tsOut(m.createdAt)} โดย ${m.createdBy || '-'} · บริษัท ${m.tables.tenants} · เอกสาร ${m.tables.documents} · ไฟล์ ${m.storage.files}`, 'detail');
+
+      log(job, 'ปิดการใช้งานระบบชั่วคราว');
+      MAINT = true; hub.toAll({ type: 'maint', on: true });
+      await new Promise(r => setTimeout(r, 1500));   // รับคำขอที่ค้างอยู่ทำงานเสร็จ (กันเอกสารช่วงนี้หลุดจากทั้ง pre-backup และชุดที่กู้คืน)
 
       log(job, 'สำรองข้อมูลปัจจุบันไว้ก่อน (ใช้ย้อนกลับได้ถ้ากู้คืนผิดชุด)');
       const pre = await doBackup(job, 'before-restore', 'ก่อนกู้คืนจาก ' + name);
       log(job, 'สำรองข้อมูลปัจจุบันแล้ว: ' + pre.name, 'detail');
       job.preFile = pre.name;
 
-      log(job, 'ปิดการใช้งานระบบชั่วคราว');
-      MAINT = true; hub.toAll({ type: 'maint', on: true });
-      await new Promise(r => setTimeout(r, 1500));   // รอคำขอที่ค้างอยู่ทำงานเสร็จ
-
       log(job, 'แตกไฟล์ Storage');
       await rmrf(fresh); await fsp.mkdir(fresh, { recursive: true });
       await run('tar', ['-xzf', path.join(work, 'storage.tar.gz'), '-C', fresh]);
 
       log(job, 'นำเข้าฐานข้อมูล');
-      const data = JSON.parse(zlib.gunzipSync(await fsp.readFile(path.join(work, 'database.json.gz'))).toString('utf8'));
+      const raw = await fsp.readFile(path.join(work, dbm));
+      let gz = raw;
+      if (CB.isEnc(raw)) {
+        const pass = String(process.env.BACKUP_PASSPHRASE || process.env.TOKEN_SECRET || '').trim();
+        if (!pass) throw new Error('ไฟล์สำรองนี้เข้ารหัสไว้ — ตั้งค่า BACKUP_PASSPHRASE ใน .env ให้ตรงกับตอนสำรองก่อนกู้คืน');
+        try { gz = CB.decrypt(raw, pass); } catch (e) { throw new Error('แกะรหัสไฟล์สำรองไม่สำเร็จ — BACKUP_PASSPHRASE ไม่ตรงกับตอนสำรอง หรือไฟล์เสียหาย'); }
+        log(job, 'ถอดรหัสไฟล์ฐานข้อมูลเรียบร้อย', 'detail');
+      }
+      const data = JSON.parse(zlib.gunzipSync(gz).toString('utf8'));
       const c = await pool.connect();
       try { await c.query('BEGIN'); await importAll(c, data); await c.query('COMMIT'); }
       catch (e) { await c.query('ROLLBACK').catch(() => {}); throw new Error('นำเข้าฐานข้อมูลไม่สำเร็จ ข้อมูลเดิมยังอยู่ครบ (' + e.message + ')'); }

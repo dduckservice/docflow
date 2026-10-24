@@ -4,7 +4,7 @@
 // ============================================================
 const storage = require('./storage');
 const { UPLOAD_TYPE_FOLDER } = require('./storage/layout');
-const { fail, clean, round2, tsOut, isYmd, safeFolderName, monthFolderName, partsOf, localeTh } = require('./util');
+const { fail, clean, round2, tsOut, isYmd, safeFolderName, sniffMime, monthFolderName, partsOf, localeTh } = require('./util');
 const documents = require('./documents');
 const { trashUpload } = require('./trash');
 
@@ -53,6 +53,8 @@ async function uploadFile(ctx, input) {
   if (!b64 || !/^[A-Za-z0-9+\/=\s]+$/.test(b64)) fail('ข้อมูลไฟล์ไม่ถูกต้อง');
   const bytes = Buffer.from(b64, 'base64');
   if (!bytes.length || bytes.length > UPLOAD_MAX_BYTES) fail('ไฟล์ต้องมีขนาดมากกว่า 0 และไม่เกิน ' + (UPLOAD_MAX_BYTES / 1048576) + ' MB');
+  const real = sniffMime(bytes);   // L2 (Security Review): เนื้อไฟล์จริงต้องมี signature ตรงกับชนิดที่แจ้ง (กันไฟล์แปลกปลอมแปลงนามสกุล)
+  if (!real || real !== mime) fail('เนื้อหาไฟล์ไม่ตรงกับชนิดที่ระบุ (ไม่พบ signature ของ ' + ext.toUpperCase() + ') — ห้ามเปลี่ยนนามสกุลไฟล์มาอัปโหลด');
   let name = safeFolderName(input.fileName, 'file');
   if (!new RegExp('\\.' + ext + '$', 'i').test(name)) name = name.replace(/\.[A-Za-z0-9]{1,5}$/, '') + '.' + ext;
 

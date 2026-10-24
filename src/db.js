@@ -10,6 +10,10 @@ types.setTypeParser(1700, v => (v === null ? null : parseFloat(v)));   // numeri
 types.setTypeParser(20, v => (v === null ? null : parseInt(v, 10)));    // int8 → number
 types.setTypeParser(1082, v => v);                                      // date → 'YYYY-MM-DD'
 
+// L11 (Security Review): เตือนเมื่อ masihใช้ค่าเริ่มต้น/placeholders — กันเข้าใจผิดว่าติดตั้งปลอดภัยแล้ว
+if (!process.env.DATABASE_URL && (!process.env.PGPASSWORD || /^(docflow|change-me-strong-password)$/i.test(process.env.PGPASSWORD))) {
+  console.warn('⚠️  รหัสผ่านฐานข้อมูลยังเป็นค่าเริ่มต้น/ตัวอย่าง (docflow หรือ change-me...) — กรุณาตั้ง POSTGRES_PASSWORD/PGPASSWORD ที่แข็งแกร่งใน .env');
+}
 const pool = new Pool({
   // ใช้ DATABASE_URL ถ้ามี ไม่งั้นใช้ค่าแยกช่อง (รองรับรหัสผ่านที่มีอักขระพิเศษ เช่น @ โดยไม่ต้องเข้ารหัส URL)
   ...(process.env.DATABASE_URL ? { connectionString: process.env.DATABASE_URL } : {

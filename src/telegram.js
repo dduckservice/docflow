@@ -156,7 +156,11 @@ async function loop() {
       STATE.ok = true; STATE.lastError = ''; wait = 3000;
       for (const u of ups) {
         offset = u.update_id + 1;
-        if (u.message) await handle(u.message).catch(e => { console.warn('telegram handle:', e.message); send(String(u.message.chat.id), '⚠️ ' + esc(e.message)).catch(() => {}); });
+        if (u.message) await handle(u.message).catch(e => {
+          const ref = Date.now().toString(36).slice(-6).toUpperCase();
+          console.warn('telegram handle [ERR ' + ref + ']:', e && e.stack || e);
+          send(String(u.message.chat.id), '⚠️ ดำเนินการไม่สำเร็จชั่วคราว (รหัสอ้างอิง ' + ref + ') กรุณาลองใหม่').catch(() => {});
+        });
       }
     } catch (e) {
       STATE.ok = false;

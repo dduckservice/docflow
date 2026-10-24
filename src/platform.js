@@ -15,7 +15,8 @@ const LOGIN_MAX_FAIL = 5, LOGIN_LOCK_SEC = 600;
 const EXPENSE_CATEGORIES = ['ค่าเช่า', 'ค่าน้ำ/ค่าไฟ', 'ค่าโทรศัพท์/อินเทอร์เน็ต', 'เงินเดือน/ค่าแรง', 'ค่าวัตถุดิบ/สินค้า', 'ค่าขนส่ง',
   'ค่าโฆษณา/การตลาด', 'ค่าซ่อมบำรุง', 'ค่าบริการวิชาชีพ', 'ค่าเดินทาง', 'วัสดุสำนักงาน', 'ภาษี/ค่าธรรมเนียม', 'อื่นๆ'];
 
-// ---------- ตัวนับล็อกอินผิด (แทน CacheService) ----------
+// ---------- ตัวนับล็อกอินผิด (ในหน่วยความจำ: ต่อ IP · ในฐานข้อมูล: ต่อชื่อผู้ใช้ ทนการรีสตาร์ท/การแจก IP) ----------
+const LOGIN_ACCOUNT_MAX_FAIL = Number(process.env.LOGIN_ACCOUNT_MAX_FAIL || 20);   // ต่อ 15 นาที ต่อ 1 ชื่อผู้ใช้/อีเมล (นับรวมทุก IP)
 const FAILS = new Map();
 function failCount(k) { const v = FAILS.get(k); if (!v || v.exp < Date.now()) { FAILS.delete(k); return 0; } return v.n; }
 function failAdd(k) { FAILS.set(k, { n: failCount(k) + 1, exp: Date.now() + LOGIN_LOCK_SEC * 1000 }); }
@@ -42,6 +43,9 @@ function verifyPw(pw, u) {
 }
 const newSalt = () => crypto.randomBytes(16).toString('hex');
 const newSid = () => crypto.randomBytes(8).toString('hex');
+// ค่าปลอมสำหรับ "soak" เวลาไม่พบบัญชี — ให้เวลาตรวจรหัสใกล้เคียงกัน (กัน account-enumeration จากช่วงเวลาที่วัดได้)
+const DUMMY_SALT = '00000000000000000000000000000000';
+const DUMMY_HASH = hashPw('docflow-timing-soak', DUMMY_SALT);
 function checkPw(pw, username) {
   pw = String(pw || '');
   if (pw.length < 8) fail('รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร');
@@ -50,15 +54,21 @@ function checkPw(pw, username) {
 }
 
 // ---------- token ----------
+// ความปลอดภัย (Security Review 2.1): คีย์เซ็น Session Token ต้องอยู่จากไฟล์ .env เท่านั้น
+// ไม่สร้าง/เก็บสำเนาในตาราง app_settings อีกต่อไป (ค่าที่เคยเก็บไว้ใน DB หลุดไปกับไฟล์สำรองไม่ได้แล้ว)
+// เดิม: TOKEN_SECRET ว่าง → สุ่มแล้วเก็บในฐานข้อมูล
 let SECRET = process.env.TOKEN_SECRET || '';
+let SECRET_ROW_PURGED = false;
 async function initSecret(ctx) {
-  if (SECRET) return;
-  SECRET = await getSetting(ctx, 'TOKEN_SECRET');
-  if (!SECRET) { SECRET = crypto.randomBytes(48).toString('hex'); await setSetting(ctx, 'TOKEN_SECRET', SECRET); }
+  if (!SECRET) throw new Error('TOKEN_SECRET ยังไม่ได้ตั้งค่าในไฟล์ .env — สร้างค่าด้วย: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))" แล้วรีสตาร์ท (ดู README หัวข้อ ความปลอดภัย)');
+  if (!SECRET_ROW_PURGED) {   // ล้างสำเนาเก่า (ถ้ามี) ที่เคยถูกเก็บใน DB → ไม่อยู่ในไฟล์สำรองอีก
+    SECRET_ROW_PURGED = true;
+    await ctx.exec("DELETE FROM app_settings WHERE key = 'TOKEN_SECRET'");
+  }
 }
 const sign = p => crypto.createHmac('sha256', SECRET).update(p).digest('base64url');
 function makeToken(u) {
-  const p = String(u.id) + '|' + (Date.now() + SESSION_HOURS * 3600 * 1000) + '|' + String(u.passwordHash).slice(0, 10) + '|' + String(u.sessionId || '');
+  const p = String(u.id) + '|' + (Date.now() + SESSION_HOURS * 3600 * 1000) + '|' + String(u.sessionId || '');
   return Buffer.from(p).toString('base64url') + '.' + sign(p);
 }
 // คืน { user } หรือ { why: 'expired' | 'replaced' }
@@ -68,24 +78,44 @@ async function authUser(ctx, token) {
     if (parts.length !== 2) return { why: 'expired' };
     const p = Buffer.from(parts[0], 'base64url').toString();
     if (!safeEq(parts[1], sign(p))) return { why: 'expired' };
-    const [uid, exp, hp, sid] = p.split('|');
+    const f = p.split('|');
+    const uid = f[0], exp = f[1];
+    const legacyHp = f.length >= 4 ? f[2] : '';   // รองรับ token รูปแบบเก่า (มี 10 ตัวแรกของ password hash) จนกว่าจะหมดอายุ
+    const sid = f[f.length - 1];
     if (Date.now() > Number(exp)) return { why: 'expired' };
     const u = await ctx.one("SELECT * FROM users WHERE id = $1 AND status = 'active'", [uid]);
-    if (!u || String(u.passwordHash).slice(0, 10) !== hp) return { why: 'expired' };
+    if (!u || (legacyHp && String(u.passwordHash).slice(0, 10) !== legacyHp)) return { why: 'expired' };
     if (String(u.sessionId || '') !== String(sid || '')) return { why: 'replaced' };
     return { user: u };
   } catch (e) { return { why: 'expired' }; }
 }
+// ออกจากระบบจากฝั่งผู้ใช้: สุ่ม session_id ใหม่ → token เดิมใช้ไม่ได้ทันที (ทั้งเครื่องนั้นถูกบังคับล็อกอินใหม่)
+async function logout(ctx) {
+  await ctx.exec('UPDATE users SET session_id = $1 WHERE id = $2', [newSid(), ctx.user.id]);
+  await ctx.log('USER:' + ctx.user.id, 'LOGOUT', String(ctx.user.username));
+  return { success: true };
+}
+// ---------- ตั๋วผ่านประตูสำหรับ SSE (EventSource ส่ง header ไม่ได้ จึงไม่ให้ใส่ token ใน URL) ----------
+// client เรียก chat.streamTicket (ผ่าน API ปกติที่มี Bearer) → ได้ลิงก์ /api/chat/stream?t=... ใช้ได้ครั้งเดียว อายุสั้น
+const STREAM_TICKETS = new Map();   // t → { uid, exp }
+function issueStreamTicket(userId) {
+  const t = crypto.randomBytes(18).toString('hex');
+  STREAM_TICKETS.set(t, { uid: String(userId), exp: Date.now() + 15000 });
+  const now = Date.now(); for (const [k, v] of STREAM_TICKETS) if (v.exp < now) STREAM_TICKETS.delete(k);
+  return 'api/chat/stream?t=' + t;
+}
+function takeStreamTicket(t) {
+  const v = STREAM_TICKETS.get(String(t)); STREAM_TICKETS.delete(String(t));
+  return v && v.exp > Date.now() ? v : null;
+}
+async function streamTicket(ctx) { return { url: issueStreamTicket(ctx.user.id) }; }
 
 // ---------- Super Admin ----------
-// มีผู้ใช้ is_super = true → ใช้ตามนั้น ; ไม่มีเลย → ผู้ดูแลระบบคนแรกที่ยังใช้งานอยู่
+// มีผู้ใช้ is_super = true → ใช้ตามนั้น ; ไม่พบเลย = fail-closed (ไม่ยกระดับ admin ธรรมดาเป็น Super อัตโนมัติ)
+// การ bootstrap Super คนแรกต้องทำผ่านหน้า createFirstAdmin หรือ scripts/create-admin.js เท่านั้น
 async function superIds(ctx) {
   if (ctx._super) return ctx._super;
   const set = new Set((await ctx.all('SELECT id FROM users WHERE is_super')).map(r => String(r.id)));
-  if (!set.size) {
-    const f = await ctx.one("SELECT id FROM users WHERE role = 'admin' AND status = 'active' ORDER BY created_at, username LIMIT 1");
-    if (f) set.add(String(f.id));
-  }
   return (ctx._super = set);
 }
 async function isSuper(ctx, u) { return !!u && (await superIds(ctx)).has(String(u.id)); }
@@ -170,7 +200,8 @@ async function syncTenantName(ctx, name) { await ctx.exec('UPDATE tenants SET co
 
 // ---------- ฟังก์ชันสาธารณะ (ไม่ต้องล็อกอิน) ----------
 // ค่าเริ่มต้นจาก .env (อ่านสด) · ค่าจริงเก็บใน app_settings (Super Admin แก้ได้ · ถ้ายังไม่เคยตั้ง = ใช้ค่า .env)
-const signupOnEnv = () => !/^(0|false|off|no)$/i.test(process.env.ALLOW_SIGNUP || 'true');
+// ความปลอดภัย: ค่าเริ่มต้น "ปิด" สมัครเอง — ต้องตั้ง ALLOW_SIGNUP=on ใน .env หรือเปิดจากหน้า Super Admin เท่า่นั้น (fail-closed)
+const signupOnEnv = () => /^(1|true|on|yes)$/i.test(process.env.ALLOW_SIGNUP || '');
 const trialDaysEnv = () => Math.max(1, Number(process.env.TRIAL_DAYS || 7));
 const quotaDefEnv = () => Math.max(1, Number(process.env.SIGNUP_USER_QUOTA || 1));
 const coQuotaDefEnv = () => Math.max(1, Number(process.env.SIGNUP_COMPANY_QUOTA || 1));
@@ -199,7 +230,7 @@ async function companyLimitOf(ctx, owner) {
 }
 const createdCount = (ctx, uid) => ctx.one('SELECT count(*)::int AS n FROM users WHERE created_by = $1', [uid]).then(r => r.n);
 const companyCount = (ctx, uid) => ctx.one('SELECT count(*)::int AS n FROM tenants WHERE created_by = $1', [uid]).then(r => r.n);
-async function authStatus(ctx) { const needsSetup = !(await ctx.one('SELECT id FROM users LIMIT 1')); const cfg = await signupConfig(ctx); return { needsSetup, allowSignup: !needsSetup && cfg.on, trialDays: cfg.days }; }
+async function authStatus(ctx) { const needsSetup = !(await ctx.one('SELECT id FROM users LIMIT 1')); const cfg = await signupConfig(ctx); return { needsSetup, setupKeyRequired: needsSetup && !!process.env.BOOTSTRAP_ADMIN_KEY, allowSignup: !needsSetup && cfg.on, trialDays: cfg.days }; }
 // ข้อความติดต่อเจ้าหน้าที่ (แสดงตอนล็อกอินไม่ได้เพราะหมดอายุ)
 async function contactLine(ctx) { const c = await contactInfo(ctx); const t = c.text || c.admins.filter(a => a.email).map(a => a.name + ' ' + a.email).join(', '); return t ? '\nติดต่อเจ้าหน้าที่: ' + t : ''; }
 
@@ -249,12 +280,16 @@ async function findLoginUser(ctx, name, extra) {
 }
 async function login(ctx, username, password) {
   username = String(username || '').trim().toLowerCase().slice(0, 100);
-  // นับรหัสผิดต่อ (IP + ชื่อผู้ใช้) และต่อ IP — คนอื่นจึงล็อกบัญชีของเราจากเครื่องของเขาไม่ได้
+  // (1) นับรหัสผิดต่อ (IP + ชื่อผู้ใช้) และต่อ IP — คนอื่นจึงล็อกบัญชีของเราจากเครื่องของเขาไม่ได้
   const ip = String((ctx.meta && ctx.meta.ip) || '-'), fk = 'fail_' + ip + '|' + username, ik = 'ipfail_' + ip;
   if (failCount(fk) >= LOGIN_MAX_FAIL || failCount(ik) >= IP_MAX_FAIL) fail('ใส่รหัสผิดหลายครั้ง กรุณารอ 10 นาทีแล้วลองใหม่');
+  // (2) นับต่อ "บัญชี" จาก login_events (ข้ามทุก IP + ทนการรีสตาร์ท) — กัน distributed password spraying
+  const recentFail = await ctx.one("SELECT count(*)::int AS n FROM login_events WHERE ok = false AND at > now() - interval '15 minutes' AND lower(username) = $1", [username]);
+  if (recentFail && recentFail.n >= LOGIN_ACCOUNT_MAX_FAIL) fail('มีการพยายามเข้าสู่ระบบบัญชีนี้ผิดพลาดหลายครั้งจากหลายแหล่ง กรุณารอสักครู่แล้วลองใหม่ หรือเปลี่ยนรหัสผ่านผ่านผู้ดูแลระบบ');
   const u = await findLoginUser(ctx, username);
   const ok = !!u && u.status === 'active' && verifyPw(String(password || ''), u);
-  if (!ok) { failAdd(fk); failAdd(ik); fail('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง'); }
+  if (!u) verifyPw(String(password || ''), { salt: DUMMY_SALT, passwordHash: DUMMY_HASH });   // soak เวลาให้ใกล้เคียงกรณีพบบัญชี
+  if (!ok) { failAdd(fk); failAdd(ik); fail('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้องหรือยังไม่อนุมัติ'); }
   FAILS.delete(fk);
   const lic = licenseOf(u, await isSuper(ctx, u));
   // License หมดอายุ: ยังเข้าสู่ระบบได้ แต่ใช้ได้เฉพาะแชทติดต่อเจ้าหน้าที่ / กรอก License Key (ตรวจที่ api.js)
@@ -267,9 +302,13 @@ async function login(ctx, username, password) {
   return sessionInfo(ctx, u2, makeToken(u2));
 }
 
-async function createFirstAdmin(ctx, username, password, displayName) {
+async function createFirstAdmin(ctx, username, password, displayName, bootstrapKey) {
   await ctx.lock('registry');
   if (await ctx.one('SELECT id FROM users LIMIT 1')) fail('ระบบมีผู้ใช้แล้ว ไม่สามารถสร้างผู้ดูแลคนแรกได้');
+  // สำหรับเครื่องที่เปิดสู่อินเทอร์เน็ต: ตั้ง BOOTSTRAP_ADMIN_KEY ใน .env เพื่อบังคับกรอกรหัสยืนยันตรงกันก่อนสร้าง Super คนแรก
+  // (หรือข้ามหน้าเว็บทั้งหมด ด้วย CLI: node scripts/create-admin.js) — ค่าสุด = ไม่บังคับ (ค่าเริ่มต้นสำหรับการติดตั้งในเครื่อง)
+  const bootKey = String(process.env.BOOTSTRAP_ADMIN_KEY || '');
+  if (bootKey && !safeEq(String(bootstrapKey || ''), bootKey)) fail('รหัสยืนยันการตั้งค่าไม่ถูกต้อง (BOOTSTRAP_ADMIN_KEY จากไฟล์ .env ของเซิร์ฟเวอร์)');
   username = String(username || '').trim().toLowerCase();
   if (!/^[a-z0-9._@-]{3,50}$/.test(username)) fail('ชื่อผู้ใช้ใช้ได้เฉพาะ a-z 0-9 . _ @ - ความยาว 3-50 ตัวอักษร');
   checkPw(password, username);
@@ -286,10 +325,15 @@ async function getSession(ctx) { return sessionInfo(ctx, ctx.user, ''); }
 
 async function changeMyPassword(ctx, oldPw, newPw) {
   const u = ctx.user;
-  if (!verifyPw(String(oldPw || ''), u)) fail('รหัสผ่านเดิมไม่ถูกต้อง');
+  const fk = 'pwchange_' + String(u.id);
+  if (failCount(fk) >= LOGIN_MAX_FAIL) fail('ใส่รหัสเดิมผิดหลายครั้ง กรุณารอ 10 นาทีแล้วลองใหม่');
+  if (!verifyPw(String(oldPw || ''), u)) { failAdd(fk); fail('รหัสผ่านเดิมไม่ถูกต้อง'); }
+  FAILS.delete(fk);
   checkPw(newPw, u.username);
-  const salt = newSalt(), next = Object.assign({}, u, { salt, passwordHash: hashPw(String(newPw), salt) });
-  await ctx.update('users', u.id, { salt, passwordHash: next.passwordHash });
+  const salt = newSalt(), sid = newSid();   // เปลี่ยน session_id ด้วย → token เดิม (ของคนอื่นที่อาจถูกขโมย) ตายทุกตัว; เครื่องนี้ได้ token ใหม่คืนกลับไปทันที
+  const next = Object.assign({}, u, { salt, passwordHash: hashPw(String(newPw), salt), sessionId: sid });
+  await ctx.update('users', u.id, { salt, passwordHash: next.passwordHash, sessionId: sid });
+  await ctx.log('USER:' + u.id, 'PASSWORD_CHANGE', String(u.username));
   return { success: true, token: makeToken(next) };
 }
 
@@ -761,12 +805,12 @@ async function listCompanies(ctx) {
   });
 }
 module.exports = {
-  managedIds, superIdsPublic: superIds, allowedTenantsPublic: allowedTenants,
+  managedIds, superIdsPublic: superIds, allowedTenantsPublic: allowedTenants, safeEq,
   setMyAvatar, avatarUrl,
   saveSignupSettings, licMsgFor: licMsg, contactLine,
   ROLES, ROLE_RANK, hashPw, newSalt, newSid, checkPw, makeToken, authUser, initSecret, isSuper, superOnly, licenseOf, licMsg,
   allowedTenants, setTenant, ensureTenant, syncTenantName, createTenantRaw, localeTh,
-  authStatus, signup, login, createFirstAdmin, activateLicense, getSession, changeMyPassword,
+  authStatus, signup, login, createFirstAdmin, activateLicense, getSession, changeMyPassword, logout, streamTicket, takeStreamTicket,
   listLicenses, saveLicense, renewLicense, saveContactInfo, createLicenseKey, listLicenseKeys, revokeLicenseKey, deleteLicenseKey, redeemLicenseKey, sendLicenseNotices, licenseNotices,
   listUsers, saveUser, setUserQuota, setCompanyQuota, companyQuotaInfo, companyLimitOf, companyCount,
   createLimitOfPublic: createLimitOf, createdCountPublic: createdCount, signupConfigPublic: signupConfig,

@@ -1,7 +1,8 @@
 // สำรอง/นำเข้าข้อมูลทั้งหมดเป็น JSON
-// ไฟล์สำรองเก็บที่: Storage / 03 สำรองข้อมูล / yyyy-MM-dd / docflow-backup-HHmmss.json.gz  (เก็บย้อนหลัง BACKUP_KEEP_DAYS วัน)
+// ไฟล์สำรองเก็บที่: Storage / 03 สำรองข้อมูล / yyyy-MM-dd / docflow-backup-HHmmss.json.enc  (เข้ารหัส AES-256-GCM ด้วย TOKEN_SECRET/BACKUP_PASSPHRASE · เก็บย้อนหลัง BACKUP_KEEP_DAYS วัน)
 const zlib = require('zlib');
 const storage = require('./storage');
+const CB = require('./cryptbox');
 const { todayStr, partsOf, dayShift } = require('./util');
 
 // เรียงตามลำดับ foreign key (นำเข้าตามลำดับนี้)
@@ -48,8 +49,11 @@ async function backupToStorage(pool) {
   } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
   const day = todayStr(), p = partsOf();
   const folder = await storage.path('backup', [day]);
-  const name = 'docflow-backup-' + p.hour + p.minute + p.second + '.json.gz';
-  const f = await storage.put(folder, name, 'application/gzip', zlib.gzipSync(Buffer.from(JSON.stringify(data))));
+  const gz = zlib.gzipSync(Buffer.from(JSON.stringify(data)));
+  const pass = CB.backupPass();
+  if (!pass) console.warn('[backup] ไม่มี BACKUP_PASSPHRASE/TOKEN_SECRET — ไฟล์สำรองรายวันจะไม่ถูกเข้ารหัส (แนะนำให้อัปเดต .env)');
+  const name = 'docflow-backup-' + p.hour + p.minute + p.second + (pass ? '.json.enc' : '.json.gz');
+  const f = await storage.put(folder, name, pass ? 'application/octet-stream' : 'application/gzip', pass ? CB.encrypt(gz, pass) : gz);
   // ลบชุดสำรองที่เก่ากว่า KEEP_DAYS วัน
   const cutoff = dayShift(day, -KEEP_DAYS);
   const base = await storage.root('backup');

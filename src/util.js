@@ -41,7 +41,19 @@ function addMonths(s, n) {
   const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
   return ymdFmt(y, m, Math.min(p.d, last));
 }
-function dayShift(s, n) { const p = ymdParse(s), d = new Date(Date.UTC(p.y, p.m - 1, p.d + n)); return ymdFmt(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()); }
+function dayShift(s, n) { const p = ymdParse(s); if (!p) return ''; const d = new Date(Date.UTC(p.y, p.m - 1, p.d + n)); return ymdFmt(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()); }
+
+// ---------- ตรวจเนื้อไฟล์จริง (magic bytes) ให้ตรงกับ MIME ที่ผู้ใช้แจ้ง — กันไฟล์ชนิดอื่นแอบแนบมาในนามสกุลรูป/PDF ----------
+// คืน mime ที่ตรวจพบ หรือ '' ถ้าไม่รู้จัก · รองรับ pdf/png/jpeg/webp/gif
+function sniffMime(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 4) return '';
+  if (buf.length >= 5 && buf.slice(0, 5).toString('ascii') === '%PDF-') return 'application/pdf';
+  if (buf.length >= 8 && buf.slice(0, 8).toString('hex') === '89504e470d0a1a0a') return 'image/png';   // 8-byte PNG signature
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.length >= 12 && buf.slice(0, 4).toString('ascii') === 'RIFF' && buf.slice(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  if (buf.length >= 6) { const g = buf.slice(0, 6).toString('ascii'); if (g === 'GIF87a' || g === 'GIF89a') return 'image/gif'; }
+  return '';
+}
 
 // ---------- ข้อความ/ตัวเลข ----------
 function clean(v, max = 2000) { return String(v == null ? '' : v).trim().slice(0, max); }
@@ -98,7 +110,8 @@ function bahtTextEn(n) {
   return int(bt) + ' Baht' + (st ? ' and ' + int(st) + ' Satang' : ' Only');
 }
 function safeFolderName(s, fallback) {
-  const v = String(s || '').replace(/[\\\/:*?"<>|\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+  let v = String(s || '').replace(/[\\\/:*?"<>|\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+  if (v === '.' || v === '..') v = '';   // กัน '../' ปลิว (ชื่อโฟลเดอร์พิเศษ ทำให้ path เพี้ยน)
   return v || fallback;
 }
 const MONTH_TH = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
@@ -106,5 +119,19 @@ function monthFolderName(ym) { const p = ym.split('-'); return p[1] + ' ' + MONT
 function ymOf(d) { return /^\d{4}-\d{2}/.test(String(d || '')) ? String(d).slice(0, 7) : ymNow(); }
 const localeTh = (a, b) => String(a).localeCompare(String(b), 'th');
 
+// CSV (UTF-8 + BOM สำหรับ Excel) — กัน CSV formula injection: ค่าที่ขึ้นต้นด้วย = + - @ หรือ tab/CR
+// จะถูก Excel/Sheets ตีความเป็นสูตร → ใส่ ' นำหน้า (M3 Security Review)
+function csvCell(v) {
+  if (v == null) return '';
+  if (v instanceof Date) v = v.toISOString();
+  else if (Buffer.isBuffer(v)) v = '(ไฟล์)';
+  else if (typeof v === 'object') v = JSON.stringify(v);
+  v = String(v);
+  // บล็อก CSV formula injection: ค่าที่ขึ้นต้นด้วย = + @ tab CR หรือ - ตามด้วยสูตร (ไม่ใช่เลขติดลบล้วน) → ใส่ ' นำหน้า ให้ Excel มองเป็นข้อความ
+  if (/^[=+@\t\r]/.test(v) || (/^-/.test(v) && !/^-?\d+(\.\d+)?$/.test(v))) v = "'" + v;
+  return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+}
+function toCsv(rows) { if (!rows.length) return '\ufeff' /* BOM */; const cols = Object.keys(rows[0]); return '\ufeff' + [cols.join(','), ...rows.map(r => cols.map(c => csvCell(r[c])).join(','))].join('\r\n'); }
+
 module.exports = { TZ, VAT_RATE, uuid, fail, partsOf, todayStr, ymNow, yearNow, compactDay, beStamp, tsOut, tsMs, dateOut, isYmd, ymdParse, daysBetween, addMonths, dayShift,
-  clean, num, round2, round3, parseVat, parseWht, fmt, thDate, ceDate, bahtText, bahtTextEn, safeFolderName, MONTH_TH, monthFolderName, ymOf, localeTh };
+  clean, num, round2, round3, parseVat, parseWht, fmt, thDate, ceDate, bahtText, bahtTextEn, safeFolderName, sniffMime, csvCell, toCsv, MONTH_TH, monthFolderName, ymOf, localeTh };

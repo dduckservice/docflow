@@ -1,0 +1,17 @@
+# ไม่อัดความลับ/ข้อมูลผู้ใช้/history เข้า Docker image (Dockerfile มี COPY . .)
+.git
+.gitignore
+.env
+*.env
+!env.example
+Backups/
+Storage/
+node_modules/
+npm-debug.log*
+*.log
+tmp/
+.dockerignore
+Dockerfile
+docker-compose.yml
+README.md
+test/

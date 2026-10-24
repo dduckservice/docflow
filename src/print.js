@@ -133,9 +133,19 @@ async function resetBrowser() {
 const RETRYABLE = /Target closed|Session closed|Connection closed|Protocol error|browser has disconnected|Navigation timeout|Target\.|WebSocket|ECONNRESET|Most likely the page has been closed/i;
 // จำกัดจำนวนการสร้าง PDF พร้อมกัน (Chromium ใช้หน่วยความจำมาก) — เกินจะต่อคิว
 const PDF_MAX = Math.max(1, Number(process.env.PDF_CONCURRENCY || 2));
+const PDF_QUEUE_MAX = Math.max(5, Number(process.env.PDF_QUEUE_MAX || 50));
 let pdfBusy = 0; const pdfQueue = [];
-async function pdfSlot() { if (pdfBusy < PDF_MAX) { pdfBusy++; return; } await new Promise(r => pdfQueue.push(r)); pdfBusy++; }
-function pdfFree() { pdfBusy--; const n = pdfQueue.shift(); if (n) n(); }
+// ส่งต่อ slot แบบ atomic ใน pdfFree (Security Review L5): คิวที่ตื่นมารับ slot ต่อทันที ไม่เปิดช่อง microtask race ให้คำขอใหม่แย่งจนเกิน PDF_MAX
+async function pdfSlot() {
+  if (pdfBusy < PDF_MAX) { pdfBusy++; return; }
+  if (pdfQueue.length >= PDF_QUEUE_MAX) fail('ระบบกำลังสร้าง PDF ค้างหลายงานชั่วคราว กรุณารอสักครู่แล้วลองใหม่');
+  await new Promise(r => pdfQueue.push(r));
+}
+function pdfFree() {
+  const n = pdfQueue.shift();
+  if (n) n();                   // ยก slot ส่งต่องานคิว (pdfBusy คงเดิม = นับต่อถูกตัว)
+  else pdfBusy--;
+}
 async function htmlToPdf(html) {
   await pdfSlot();
   try {

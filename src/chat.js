@@ -8,7 +8,7 @@
 const storage = require('./storage');
 const { sendMail } = require('./mail');
 const hub = require('./hub');
-const { fail, uuid, clean, tsOut, partsOf, safeFolderName, thDate } = require('./util');
+const { fail, uuid, clean, tsOut, partsOf, safeFolderName, sniffMime, thDate } = require('./util');
 
 const MAX_FILE = Number(process.env.CHAT_MAX_MB || 5) * 1024 * 1024;
 const MIMES = { 'application/pdf': 'pdf', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
@@ -44,6 +44,8 @@ async function saveFile(ctx, owner, f) {
   if (!/^[A-Za-z0-9+/=\s]+$/.test(b64)) fail('ข้อมูลไฟล์ไม่ถูกต้อง');
   const buf = Buffer.from(b64, 'base64');
   if (!buf.length || buf.length > MAX_FILE) fail('ไฟล์แนบต้องไม่เกิน ' + (MAX_FILE / 1048576) + ' MB');
+  const real = sniffMime(buf);   // L2 (Security Review): เนื้อไฟล์จริงต้องตรงชนิดที่แจ้ง
+  if (!real || real !== mime) fail('เนื้อหาไฟล์ไม่ตรงกับชนิดที่ระบุ — แนบได้เฉพาะรูป (PNG/JPG/WEBP/GIF) หรือ PDF ตัวจริง');
   let name = safeFolderName(f.fileName, 'file');
   if (!new RegExp('\\.' + ext + '$', 'i').test(name)) name = name.replace(/\.[A-Za-z0-9]{1,5}$/, '') + '.' + ext;
   const p = partsOf(), folder = await storage.path('chat', [safeFolderName(owner, 'user'), p.year + '-' + p.month]);

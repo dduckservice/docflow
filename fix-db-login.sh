@@ -26,9 +26,12 @@ done
 echo "เชื่อมต่อด้วยบัญชี: $ADMIN"
 
 docker compose exec -T db psql -q -v ON_ERROR_STOP=1 -U "$ADMIN" -d postgres -v u="$U" -v p="$P" -v d="$D" <<'SQL'
-SELECT format('CREATE ROLE %I LOGIN SUPERUSER', :'u') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'u') \gexec
-SELECT format('ALTER ROLE %I WITH LOGIN SUPERUSER PASSWORD %L', :'u', :'p') \gexec
+-- L10 (Security Review): แอปต้องไม่ต้องเป็น SUPERUSER — สร้าง/ปรับเป็น NOSUPERUSER (เจ้าของฐานข้อมูลยังสร้างตาราง/migrate ได้ครบ)
+SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER', :'u') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'u') \gexec
+SELECT format('ALTER ROLE %I WITH LOGIN NOSUPERUSER PASSWORD %L', :'u', :'p') \gexec
 SELECT format('CREATE DATABASE %I OWNER %I', :'d', :'u') WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'d') \gexec
+-- ถ้าฐานข้อมูลถูกสร้างด้วยเจ้าของคนอื่น (เช่น postgres) → โอนเจ้าของให้แอปหรือ grants ไม่พอตอน migrate ก็ให้ postgres เป็นเจ้าของแล้ว GRANT
+SELECT format('ALTER DATABASE %I OWNER TO %I', :'d', :'u') WHERE EXISTS (SELECT 1 FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba WHERE d.datname = :'d' AND r.rolname <> :'u') \gexec
 SQL
 
 echo "ตั้งรหัสผ่านของ $U ให้ตรงกับ .env แล้ว — กำลังเริ่มแอปใหม่"
