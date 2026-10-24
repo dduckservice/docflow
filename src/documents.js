@@ -75,7 +75,8 @@ async function findDoc(ctx, id) { return ctx.one('SELECT * FROM documents WHERE 
 // ---------- Phase 2: เงินมัดจำ ----------
 // ใบรับเงินมัดจำ (ยังไม่ยกเลิก) ทั้งหมดของใบเสนอราคาหนึ่ง — ฐานมัดจำรวม = ผลรวม subtotal (ก่อน VAT)
 async function depositsOfQuotation(ctx, quotationId) {
-  const rows = await ctx.all("SELECT id, number, date, subtotal, vat_amount, total FROM documents WHERE tenant_id = $1 AND type = 'deposit' AND source_document_id = $2 AND status <> 'cancelled' ORDER BY date, number", [ctx.tenantId, String(quotationId)]);
+  // นับเอกสารมัดจำด้วย variant='deposit' (ออกเป็น type ได้หลายแบบ: ใบวางบิล/ใบกำกับ-ใบเสร็จ/เงินสด)
+  const rows = await ctx.all("SELECT id, number, date, subtotal, vat_amount, total FROM documents WHERE tenant_id = $1 AND variant = 'deposit' AND source_document_id = $2 AND status <> 'cancelled' ORDER BY date, number", [ctx.tenantId, String(quotationId)]);
   const base = round2(rows.reduce((s, r) => s + (Number(r.subtotal) || 0), 0));
   const vat = round2(rows.reduce((s, r) => s + (Number(r.vatAmount) || 0), 0));
   const paid = round2(rows.reduce((s, r) => s + (Number(r.total) || 0), 0));
@@ -93,7 +94,7 @@ async function quotationBalance(ctx, quotationId) {
 }
 // มีเอกสารงวด (ใบแจ้งหนี้/ใบกำกับ/ใบเสร็จ ที่ยังไม่ยกเลิก) ที่สร้างต่อจากใบเสนอราคานี้แล้วหรือยัง (ใช้กันการลบ/ยกเลิกมัดจำย้อนหลัง)
 async function hasFinalForQuotation(ctx, quotationId) {
-  return !!(await ctx.one("SELECT 1 FROM documents WHERE tenant_id = $1 AND source_document_id = $2 AND type IN ('invoice','taxinvoice','receipt') AND status <> 'cancelled' AND COALESCE(deposit_amount,0) > 0 LIMIT 1", [ctx.tenantId, String(quotationId)]));
+  return !!(await ctx.one("SELECT 1 FROM documents WHERE tenant_id = $1 AND source_document_id = $2 AND type IN ('invoice','taxinvoice','receipt','cashsale') AND COALESCE(variant,'') <> 'deposit' AND status <> 'cancelled' AND COALESCE(deposit_amount,0) > 0 LIMIT 1", [ctx.tenantId, String(quotationId)]));
 }
 
 // ---------- Phase 3: แบ่งงวด ----------
@@ -103,7 +104,8 @@ async function quotationBilling(ctx, quotationId) {
   const q = await findDoc(ctx, quotationId);
   if (!q || q.type !== 'quotation') return null;
   const fullNet = round2((Number(q.subtotal) || 0) - (Number(q.discount) || 0));
-  const rows = await ctx.all("SELECT id, number, date, subtotal, deposit_amount, installment_no, installment_pct, status FROM documents WHERE tenant_id = $1 AND source_document_id = $2 AND type = 'invoice' AND status <> 'cancelled' ORDER BY installment_no, number", [ctx.tenantId, String(quotationId)]);
+  // นับเฉพาะเอกสารวางบิล "ต้นทาง" ที่ออกจากใบเสนอราคาโดยตรง (ไม่นับโซ่ที่แปลงต่อ และไม่นับเอกสารมัดจำ)
+  const rows = await ctx.all("SELECT id, number, date, type, subtotal, deposit_amount, installment_no, installment_pct, status FROM documents WHERE tenant_id = $1 AND source_document_id = $2 AND type IN ('invoice','taxinvoice','receipt','cashsale') AND COALESCE(variant,'') <> 'deposit' AND status <> 'cancelled' ORDER BY installment_no, number", [ctx.tenantId, String(quotationId)]);
   const billedBase = round2(rows.reduce((s, r) => s + (Number(r.subtotal) || 0), 0));
   const maxNo = rows.reduce((m, r) => Math.max(m, Number(r.installmentNo) || 0), 0);
   const hasInstallment = rows.some(r => (Number(r.installmentNo) || 0) > 0);
@@ -120,7 +122,29 @@ async function listDocuments(ctx, keyword) {
   const like = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
   const rows = await ctx.all(`SELECT * FROM documents WHERE tenant_id = $1 AND ($2 = '' OR lower(COALESCE(number,'')) LIKE $3 OR lower(COALESCE(type,'')) LIKE $3
       OR lower(COALESCE(customer_name,'')) LIKE $3 OR lower(COALESCE(status,'')) LIKE $3) ORDER BY updated_at DESC LIMIT 500`, [ctx.tenantId, q, like]);
-  return rows.map(pubDocRow);
+  const out = rows.map(pubDocRow);
+  // สถานะย่อยของใบเสนอราคา: มีมัดจำ / แบ่งงวด / วางบิลแล้ว / วางบิลครบ (คำนวณจากเอกสารลูก)
+  const qIds = out.filter(r => r.type === 'quotation').map(r => r.id);
+  if (qIds.length) {
+    const agg = await ctx.all(`SELECT source_document_id::text AS sid,
+        COALESCE(SUM(CASE WHEN variant = 'deposit' THEN subtotal ELSE 0 END),0) AS dep,
+        COALESCE(SUM(CASE WHEN type IN ('invoice','taxinvoice','receipt','cashsale') AND COALESCE(variant,'') <> 'deposit' THEN subtotal ELSE 0 END),0) AS billed,
+        COALESCE(MAX(CASE WHEN type IN ('invoice','taxinvoice','receipt','cashsale') AND COALESCE(variant,'') <> 'deposit' AND installment_no > 0 THEN 1 ELSE 0 END),0) AS has_inst
+      FROM documents WHERE tenant_id = $1 AND source_document_id = ANY($2::uuid[]) AND status <> 'cancelled' GROUP BY source_document_id`, [ctx.tenantId, qIds]);
+    const by = {}; agg.forEach(a => { by[String(a.sid)] = a; });
+    out.forEach(r => {
+      if (r.type !== 'quotation') return;
+      const a = by[String(r.id)]; if (!a) { r.billTags = []; return; }
+      const fullNet = round2((Number(r.subtotal) || 0) - (Number(r.discount) || 0));
+      const dep = Number(a.dep) || 0, billed = Number(a.billed) || 0, hasInst = Number(a.hasInst) > 0, tags = [];
+      if (billed > 0 && billed >= fullNet - 0.009) tags.push('วางบิลครบ');
+      else if (hasInst) tags.push('แบ่งงวด');
+      else if (billed > 0) tags.push('วางบิลแล้ว');
+      if (dep > 0) tags.push('มีมัดจำ');
+      r.billTags = tags;
+    });
+  }
+  return out;
 }
 async function getDocument(ctx, id) {
   const d = await findDoc(ctx, id);
@@ -304,7 +328,7 @@ async function saveDocument(ctx, input) {
 }
 
 async function convertDocument(ctx, sourceId, targetType) {
-  if (!['invoice', 'taxinvoice', 'receipt'].includes(targetType)) fail('ประเภทปลายทางไม่ถูกต้อง');
+  if (!['invoice', 'taxinvoice', 'receipt', 'cashsale'].includes(targetType)) fail('ประเภทปลายทางไม่ถูกต้อง');
   await ctx.lock('tenant:' + ctx.tenantId);
   const source = await findDoc(ctx, sourceId);
   if (!source) fail('ไม่พบเอกสารต้นทาง');
@@ -312,19 +336,25 @@ async function convertDocument(ctx, sourceId, targetType) {
   if (source.status === 'rejected') fail('ใบเสนอราคานี้ไม่อนุมัติ จึงสร้างเอกสารต่อไม่ได้');
   // Phase 1: ต้องอนุมัติใบเสนอราคาก่อน จึงจะสร้างเอกสารต่อได้
   if (source.type === 'quotation' && !QUOTE_APPROVED.includes(String(source.status))) fail('กรุณาอนุมัติใบเสนอราคาก่อนสร้างเอกสารต่อ (กดที่สถานะ → อนุมัติ)');
-  if (targetType === 'invoice' && source.type !== 'quotation') fail('สร้างใบแจ้งหนี้จากใบเสนอราคาเท่านั้น');
-  // Phase 3: ถ้าใบเสนอราคาแบ่งงวดแล้ว ห้ามสร้างใบวางบิลเต็มจำนวน (ให้ใช้ปุ่มแบ่งงวด)
-  if (targetType === 'invoice' && source.type === 'quotation') {
+  // ประเภทปลายทางตามต้นทาง — ใบเสนอราคา → ใบวางบิล/ใบกำกับ-ใบเสร็จ/เงินสด (วางบิลเต็มจำนวน) · ใบวางบิล → ใบกำกับภาษี/ใบกำกับ-ใบเสร็จ · ใบกำกับภาษี → ใบกำกับ-ใบเสร็จ
+  if (['invoice', 'cashsale'].includes(targetType) && source.type !== 'quotation') fail('สร้างเอกสารนี้จากใบเสนอราคาเท่านั้น');
+  if (targetType === 'taxinvoice' && source.type !== 'invoice') fail('สร้างใบกำกับภาษีจากใบแจ้งหนี้เท่านั้น');
+  if (targetType === 'receipt' && !['quotation', 'invoice', 'taxinvoice'].includes(source.type)) fail('สร้างใบเสร็จจากใบเสนอราคา/ใบแจ้งหนี้/ใบกำกับภาษีเท่านั้น');
+  // Phase 3: วางบิลเต็มจำนวนจากใบเสนอราคา — ห้ามปนกับการแบ่งงวด
+  if (source.type === 'quotation' && ['invoice', 'receipt', 'cashsale'].includes(targetType)) {
     const b = await quotationBilling(ctx, source.id);
     if (b && b.hasInstallment) fail('ใบเสนอราคานี้แบ่งงวดแล้ว กรุณาสร้างงวดถัดไปผ่านปุ่ม "แบ่งงวด"');
   }
-  if (targetType === 'taxinvoice' && source.type !== 'invoice') fail('สร้างใบกำกับภาษีจากใบแจ้งหนี้เท่านั้น');
-  if (targetType === 'receipt' && !['invoice', 'taxinvoice'].includes(source.type)) fail('สร้างใบเสร็จจากใบแจ้งหนี้หรือใบกำกับภาษีเท่านั้น');
-  if (targetType === 'taxinvoice' && parseVat(source.vatRate) === 0) fail('ใบแจ้งหนี้นี้ไม่คิด VAT จึงออกใบกำกับภาษีไม่ได้');
+  if ((targetType === 'taxinvoice' && parseVat(source.vatRate) === 0)) fail('ใบแจ้งหนี้นี้ไม่คิด VAT จึงออกใบกำกับภาษีไม่ได้');
   const comp = await getCompany(ctx, false);
   if (targetType === 'taxinvoice' && String(comp.vatRegistered || '') === 'no') fail('บริษัทนี้ไม่ได้จดทะเบียนภาษีมูลค่าเพิ่ม ออกใบกำกับภาษีไม่ได้');
-  const existing = await ctx.one("SELECT id, number FROM documents WHERE tenant_id = $1 AND source_document_id = $2 AND type = $3 AND status <> 'cancelled' LIMIT 1", [ctx.tenantId, source.id, targetType]);
+  const existing = await ctx.one("SELECT id, number FROM documents WHERE tenant_id = $1 AND source_document_id = $2 AND type = $3 AND COALESCE(variant,'') <> 'deposit' AND status <> 'cancelled' LIMIT 1", [ctx.tenantId, source.id, targetType]);
   if (existing) return { success: true, id: existing.id, number: existing.number, alreadyExists: true };
+  // วางบิลเต็มจำนวนจากใบเสนอราคาซ้ำ (มีเอกสารวางบิลต้นทางอื่นอยู่แล้ว)
+  if (source.type === 'quotation' && ['invoice', 'receipt', 'cashsale'].includes(targetType)) {
+    const b = await quotationBilling(ctx, source.id);
+    if (b && b.billedBase > 0.009) fail('ใบเสนอราคานี้ออกเอกสารวางบิลแล้ว');
+  }
   const items = await ctx.all('SELECT * FROM document_items WHERE document_id = $1 ORDER BY line_no', [source.id]);
   if (!items.length) fail('เอกสารต้นทางไม่มีรายการสินค้า/บริการ');
   const id = uuid(), now = new Date(), number = await nextNumber(ctx, targetType);
@@ -338,7 +368,7 @@ async function convertDocument(ctx, sourceId, targetType) {
   await ctx.insert('documents', { id, number, type: targetType, companyId: String(source.companyId || comp.id), date: todayStr(), dueDate: '',
     customerName: source.customerName, customerTaxId: source.customerTaxId, customerAddress: source.customerAddress, customerPhone: source.customerPhone,
     subtotal: cSub, discount: cDisc, vatRate: cVatRate, vatAmount: cVat, total: cTotal, depositAmount: depBase, depositRef: depRef,
-    notes: cNotes, projectName: source.projectName || '', whtRate: parseWht(source.whtRate), status: targetType === 'receipt' ? 'paid' : 'draft',
+    notes: cNotes, projectName: source.projectName || '', whtRate: parseWht(source.whtRate), status: ['receipt', 'cashsale'].includes(targetType) ? 'paid' : 'draft',
     variant: targetType === 'receipt' ? 'receipt' : '', sourceDocumentId: String(source.id), createdAt: now, updatedAt: now, createdBy: ctx.username() });
   await ctx.insertMany('document_items', items.map((x, i) => ({ id: uuid(), documentId: id, lineNo: i + 1, description: x.description, quantity: Number(x.quantity), unit: x.unit,
     price: Number(x.price), discount: Number(x.discount), amount: Number(x.amount) })));
@@ -390,23 +420,27 @@ async function createDeposit(ctx, quotationId, input) {
   if (vatReg && vatRate === 0) fail('กิจการจดทะเบียน VAT ใบรับเงินมัดจำต้องคิด VAT');
   const date = clean(input.date, 10) || todayStr();
   if (!isYmd(date)) fail('วันที่รับเงินมัดจำไม่ถูกต้อง');
-  const payDate = clean(input.payDate, 10) || date;
-  if (!isYmd(payDate)) fail('วันที่ชำระเงินไม่ถูกต้อง');
-  const payMethods = String(input.payMethods || 'transfer').split(',').map(s => s.trim()).filter((s, i, a) => PAY_METHODS.includes(s) && a.indexOf(s) === i).join(',') || 'transfer';
+  // ประเภทเอกสารมัดจำ (variant='deposit' เสมอ เพื่อคุมยอดมัดจำ): deposit=ใบรับเงินมัดจำ/ใบกำกับภาษี(รับเงินแล้ว) · invoice=ใบวางบิลมัดจำ(ยังไม่รับเงิน) · cashsale=เงินสด
+  const docType = ['deposit', 'invoice', 'cashsale'].includes(input.docType) ? input.docType : 'deposit';
+  const paid = docType !== 'invoice';
   const net = amount, vatAmount = round2(net * vatRate / 100), total = round2(net + vatAmount);
-  const id = uuid(), now = new Date(), number = await nextNumber(ctx, 'deposit');
-  await ctx.insert('documents', { id, number, type: 'deposit', companyId: String(q.companyId || comp.id), date, dueDate: '',
+  const payDate = paid ? (clean(input.payDate, 10) || date) : '';
+  if (payDate && !isYmd(payDate)) fail('วันที่ชำระเงินไม่ถูกต้อง');
+  const payMethods = paid ? (String(input.payMethods || 'transfer').split(',').map(s => s.trim()).filter((s, i, a) => PAY_METHODS.includes(s) && a.indexOf(s) === i).join(',') || 'transfer') : '';
+  const id = uuid(), now = new Date(), number = await nextNumber(ctx, docType);
+  const noun = paid ? 'รับเงินมัดจำ' : 'วางบิลเงินมัดจำ';
+  await ctx.insert('documents', { id, number, type: docType, companyId: String(q.companyId || comp.id), date, dueDate: '',
     customerName: q.customerName, customerTaxId: q.customerTaxId, customerAddress: q.customerAddress, customerPhone: q.customerPhone,
     subtotal: net, discount: 0, vatRate, vatAmount, total, whtRate: 0, depositAmount: 0, depositRef: '',
-    notes: 'รับเงินมัดจำตามใบเสนอราคา ' + q.number + (clean(input.notes, 1000) ? ' — ' + clean(input.notes, 1000) : ''),
-    projectName: q.projectName || '', status: 'paid', variant: 'deposit', sourceDocumentId: String(q.id),
-    payMethods, payBank: clean(input.payBank, 100), payNo: clean(input.payNo, 100), payDate, payAmount: String(total),
+    notes: noun + 'ตามใบเสนอราคา ' + q.number + (clean(input.notes, 1000) ? ' — ' + clean(input.notes, 1000) : ''),
+    projectName: q.projectName || '', status: paid ? 'paid' : 'draft', variant: 'deposit', sourceDocumentId: String(q.id),
+    payMethods, payBank: paid ? clean(input.payBank, 100) : '', payNo: paid ? clean(input.payNo, 100) : '', payDate, payAmount: paid ? String(total) : '',
     createdAt: now, updatedAt: now, createdBy: ctx.username() });
   await ctx.insertMany('document_items', [{ id: uuid(), documentId: id, lineNo: 1,
     description: 'เงินมัดจำ (อ้างอิงใบเสนอราคา ' + q.number + ')', quantity: 1, unit: 'รายการ', price: net, discount: 0, amount: net }]);
-  await ctx.log(id, 'CREATE', number + ' | รับเงินมัดจำ ' + net.toLocaleString('th-TH') + ' (VAT ' + vatAmount.toLocaleString('th-TH') + ') จาก ' + q.number);
+  await ctx.log(id, 'CREATE', number + ' | ' + noun + ' ' + net.toLocaleString('th-TH') + ' (VAT ' + vatAmount.toLocaleString('th-TH') + ') จาก ' + q.number);
   const after = await quotationBalance(ctx, quotationId);
-  return { success: true, id, number, depositBase: net, vatAmount, total, remaining: after.remaining };
+  return { success: true, id, number, type: docType, depositBase: net, vatAmount, total, remaining: after.remaining };
 }
 
 // Phase 3: สร้างใบวางบิลแบ่งงวดจากใบเสนอราคา (ระบุเป็น % หรือยอดเงิน) — รวมทุกงวด = มูลค่างานเต็ม
@@ -448,13 +482,19 @@ async function createInstallment(ctx, quotationId, input) {
   if (!isYmd(date)) fail('วันที่ไม่ถูกต้อง');
   const no = bill.nextNo, pctLabel = Number.isInteger(pct) ? String(pct) : String(round2(pct));
   const label = clean(input.label, 200) || ('งวดที่ ' + no + (pct ? ' (' + pctLabel + '%)' : ''));
-  const id = uuid(), now = new Date(), number = await nextNumber(ctx, 'invoice');
-  await ctx.insert('documents', { id, number, type: 'invoice', companyId: String(q.companyId || comp.id), date, dueDate: clean(input.dueDate, 10),
+  // ประเภทเอกสารงวด: invoice=ใบวางบิล(ยังไม่รับเงิน) · receipt=ใบกำกับภาษี/ใบเสร็จ(รับเงินแล้ว) · cashsale=เงินสด
+  const docType = ['invoice', 'receipt', 'cashsale'].includes(input.docType) ? input.docType : 'invoice';
+  const paid = PAID_TYPES.includes(docType);
+  const payDate = paid ? (clean(input.payDate, 10) || date) : '';
+  const payMethods = paid ? (String(input.payMethods || 'transfer').split(',').map(s => s.trim()).filter((s, i, a) => PAY_METHODS.includes(s) && a.indexOf(s) === i).join(',') || 'transfer') : '';
+  const id = uuid(), now = new Date(), number = await nextNumber(ctx, docType);
+  await ctx.insert('documents', { id, number, type: docType, companyId: String(q.companyId || comp.id), date, dueDate: clean(input.dueDate, 10),
     customerName: q.customerName, customerTaxId: q.customerTaxId, customerAddress: q.customerAddress, customerPhone: q.customerPhone,
     subtotal: base, discount: 0, vatRate: vr, vatAmount: vat, total, whtRate: parseWht(q.whtRate),
     depositAmount: dep, depositRef: depRef, installmentNo: no, installmentPct: pct,
     notes: 'แบ่งงวดจากใบเสนอราคา ' + q.number + ' · ' + label + (dep > 0 ? ' · หักมัดจำ ' + depRef : ''),
-    projectName: q.projectName || '', status: 'draft', variant: 'installment', sourceDocumentId: String(q.id),
+    projectName: q.projectName || '', status: paid ? 'paid' : 'draft', variant: 'installment', sourceDocumentId: String(q.id),
+    payMethods, payBank: paid ? clean(input.payBank, 100) : '', payNo: paid ? clean(input.payNo, 100) : '', payDate, payAmount: paid ? String(total) : '',
     createdAt: now, updatedAt: now, createdBy: ctx.username() });
   await ctx.insertMany('document_items', [{ id: uuid(), documentId: id, lineNo: 1,
     description: label + ' ตามใบเสนอราคา ' + q.number, quantity: 1, unit: 'งวด', price: base, discount: 0, amount: base }]);

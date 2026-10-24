@@ -357,6 +357,13 @@ main>.top{top:0;position:sticky;z-index:20}
 .stmenu-pop button:hover{background:var(--soft,#f2f5fb)}
 .stmenu-pop button.ok{color:#17794f;font-weight:600}
 .stmenu-pop button.no{color:#b23b3b}
+.stmenu-sep{height:1px;background:var(--line,#e5e9f2);margin:5px 6px}
+.stcell{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.bchip{display:inline-block;border-radius:7px;padding:3px 8px;font-size:11px;font-weight:700;white-space:nowrap}
+.bchip-dep{background:#e3f6ec;color:#17794f}
+.bchip-bill{background:#fff3df;color:#a96a0a}
+.bchip-done{background:#e0f5f5;color:#12767a}
+.stmenu-pop{max-height:min(70vh,520px);overflow-y:auto}
 .depbox{margin:14px 0;padding:14px 16px;border:1px solid var(--line,#e5e9f2);border-radius:12px;background:var(--soft,#f7f9fd)}
 .depbox .depttl{font-weight:700;margin-bottom:8px;color:var(--text,#2a3344)}
 .depbox .deprow{display:flex;justify-content:space-between;gap:12px;padding:5px 0;font-size:14px;border-bottom:1px dashed var(--line,#e5e9f2)}
@@ -766,7 +773,7 @@ window.addEventListener('unhandledrejection',function(e){var b=document.getEleme
 <div class="layout hidden" id="app">
 <aside>
 <button class="nav active" onclick="page('dashboard',this)"><span class="nicon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg></span><span class="nlbl">ภาพรวมบริษัท</span></button>
-<button class="nav need-audit" onclick="openMonitor(this)"><span class="nicon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg></span><span class="nlbl">ติดตามผู้ใช้งาน</span></button>
+<button class="nav need-super" onclick="openMonitor(this)"><span class="nicon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg></span><span class="nlbl">ติดตามผู้ใช้งาน</span></button>
 <div class="navgrp">ขาย</div>
 <button class="nav" onclick="openDocs('quotation',this)"><span class="nicon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span><span class="nlbl">ใบเสนอราคา</span></button>
 <button class="nav" onclick="openDocs('invoice',this)"><span class="nicon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span><span class="nlbl">ใบวางบิล</span></button>
@@ -1425,10 +1432,25 @@ function fcell(n){return `<span class="filecell${n?' has':''}" title="${n?'ม�
 function lrowHtml(o){return `<tr onclick="${o.open}"><td>${fcell(o.files)}</td><td>${o.date?d2th(o.date):'-'}</td><td><span class="dot dot-${esc(o.status||'draft')}"></span>${esc(o.number||'-')}</td><td>${esc(o.party||'-')}</td><td><span class="catchip" style="background:${dtypeChip[o.kind]||'#eef1f6;color:#4b5a70'}">${esc(o.label)}</span></td><td class="r">${o.total===''?'-':money(o.total)}</td><td>${o.statusCell!=null&&o.statusCell!==''?o.statusCell:(o.status?`<span class="stpill st-${esc(o.status)}">${esc(o.statusTh)}</span>`:'<span class="muted">-</span>')}</td><td>${o.edits?`<span class="edtag" title="${esc(o.editTip||'')}">✎ แก้ไข ${o.edits} ครั้ง</span>`:'<span class="muted">-</span>'}</td><td onclick="event.stopPropagation()"><div class="rowact end">${o.eye||''}${o.dl||''}${o.del||''}</div></td></tr>`}
 // ---- เมนูสถานะในแถวรายการเอกสารขาย (Phase 1: อนุมัติ / สร้างเอกสารต่อ) ----
 function docStatusItems(d){
-  const id=esc(d.id),it=[],A=(t,fn,c)=>it.push(`<button class="${c||''}" onclick="${fn}">${t}</button>`);
+  const id=esc(d.id),it=[],A=(t,fn,c)=>it.push(`<button class="${c||''}" onclick="${fn}">${t}</button>`),S=()=>it.push('<div class="stmenu-sep"></div>');
   if(d.type==='quotation'){
     if(['pending','draft'].includes(d.status)){A('✓ '+tt('อนุมัติ','Approve'),`stDo('${id}','approve')`,'ok');A('✕ '+tt('ไม่อนุมัติ','Reject'),`stDo('${id}','reject')`,'no')}
-    else if(['approved','issued'].includes(d.status)){A('💰 '+tt('รับเงินมัดจำ','Receive deposit'),`depOpen('${id}')`,'ok');A('📑 '+tt('แบ่งงวด','Split billing'),`instOpen('${id}')`,'ok');A(tt('สร้างใบวางบิล/ใบแจ้งหนี้','Create invoice'),`stCv('${id}','invoice')`);A(tt('สร้างใบกำกับภาษี/ใบเสร็จรับเงิน','Create tax invoice/receipt'),`stCv('${id}','receipt')`);A('✕ '+tt('ไม่อนุมัติ','Reject'),`stDo('${id}','reject')`,'no')}
+    else if(['approved','issued'].includes(d.status)){
+      A(tt('สร้างใบวางบิล/ใบแจ้งหนี้','Create invoice'),`stCv('${id}','invoice')`);
+      A(tt('สร้างใบกำกับภาษี/ใบเสร็จรับเงิน','Create tax invoice/receipt'),`stCv('${id}','receipt')`);
+      A(tt('สร้างใบกำกับภาษี/ใบเสร็จรับเงิน (เงินสด)','Create tax invoice/receipt (cash)'),`stCv('${id}','cashsale')`);
+      A(tt('สร้างใบสั่งซื้อ','Create purchase order'),`stPo('${id}')`);
+      S();
+      A('📑 '+tt('แบ่งจ่ายใบวางบิล/ใบแจ้งหนี้','Split billing: invoice'),`instOpen('${id}','invoice')`);
+      A('📑 '+tt('แบ่งจ่ายใบกำกับภาษี/ใบเสร็จรับเงิน','Split billing: tax invoice/receipt'),`instOpen('${id}','receipt')`);
+      A('📑 '+tt('แบ่งจ่ายใบกำกับภาษี/ใบเสร็จรับเงิน (เงินสด)','Split billing: cash'),`instOpen('${id}','cashsale')`);
+      S();
+      A('💰 '+tt('มัดจำใบวางบิล/ใบแจ้งหนี้','Deposit: invoice'),`depOpen('${id}','invoice')`);
+      A('💰 '+tt('มัดจำใบกำกับภาษี/ใบเสร็จรับเงิน','Deposit: tax invoice/receipt'),`depOpen('${id}','deposit')`);
+      A('💰 '+tt('มัดจำใบกำกับภาษี/ใบเสร็จรับเงิน (เงินสด)','Deposit: cash'),`depOpen('${id}','cashsale')`);
+      S();
+      A('✕ '+tt('ไม่อนุมัติ','Reject'),`stDo('${id}','reject')`,'no');
+    }
     else if(d.status==='rejected'){A('✓ '+tt('อนุมัติ','Approve'),`stDo('${id}','approve')`,'ok')}
   } else if(d.type==='invoice'&&!['cancelled','paid'].includes(d.status)){
     A(tt('สร้างใบกำกับภาษี','Create tax invoice'),`stCv('${id}','taxinvoice')`);A(tt('สร้างใบกำกับภาษี/ใบเสร็จรับเงิน','Create tax invoice/receipt'),`stCv('${id}','receipt')`);
@@ -1437,11 +1459,16 @@ function docStatusItems(d){
   }
   return it;
 }
+function billTagClass(t){return t==='มีมัดจำ'?'dep':t==='วางบิลครบ'?'done':'bill'}
 function docStatusCell(d){
-  if(!(SESSION&&SESSION.user&&['admin','audit','staff'].includes(SESSION.user.role)))return '';
-  const items=docStatusItems(d),base=`stpill st-${esc(d.status)}`,label=esc(statusTh[d.status]||d.status);
-  if(!items.length)return `<span class="${base}">${label}</span>`;
-  return `<div class="stmenu"><button type="button" class="${base} stbtn" onclick="stMenuTog(event,this)">${label} <span class="cv">▾</span></button><div class="stmenu-pop">${items.join('')}</div></div>`;
+  const tags=(d.billTags||[]).map(t=>`<span class="bchip bchip-${billTagClass(t)}">${esc(t)}</span>`).join('');
+  const canMenu=SESSION&&SESSION.user&&['admin','audit','staff'].includes(SESSION.user.role);
+  const base=`stpill st-${esc(d.status)}`,label=esc(statusTh[d.status]||d.status);
+  const items=canMenu?docStatusItems(d):[];
+  const pill=items.length
+    ?`<div class="stmenu"><button type="button" class="${base} stbtn" onclick="stMenuTog(event,this)">${label} <span class="cv">▾</span></button><div class="stmenu-pop">${items.join('')}</div></div>`
+    :`<span class="${base}">${label}</span>`;
+  return `<div class="stcell">${pill}${tags}</div>`;
 }
 function stMenuClose(){document.querySelectorAll('.stmenu-pop.show').forEach(p=>{p.classList.remove('show');p.style.position='';p.style.top='';p.style.left='';p.style.minWidth='';});}
 function stMenuTog(ev,btn){ev.stopPropagation();const pop=btn.nextElementSibling,wasOpen=pop.classList.contains('show');stMenuClose();if(wasOpen)return;
@@ -1456,12 +1483,14 @@ window.addEventListener('scroll',stMenuClose,true);
 window.addEventListener('resize',stMenuClose);
 async function stDo(id,action){try{const r=await call('setDocStatus',id,action);toast(action==='approve'?tt('อนุมัติใบเสนอราคาแล้ว','Quotation approved'):tt('ทำเครื่องหมาย "ไม่อนุมัติ" แล้ว','Marked as rejected'));await load()}catch(e){toast(e.message)}}
 async function stCv(id,target){try{const r=await call('convertDocument',id,target);if(r.alreadyExists)toast(tt('มีเอกสารปลายทางแล้ว: ','Already exists: ')+r.number);else toast(tt('สร้างเอกสาร ','Created ')+r.number+tt(' แล้ว',''));await load();await edit(r.id)}catch(e){toast(e.message)}}
+async function stPo(id){try{const r=await call('createPoFromQuotation',id);toast(tt('สร้างใบสั่งซื้อ ','Created PO ')+r.number+tt(' แล้ว — กรุณาเปิดเมนูจัดซื้อเพื่อระบุผู้ขาย',' — set the supplier in Purchasing'));await load()}catch(e){toast(e.message)}}
 // ---- Phase 2: เงินมัดจำ ----
 let DEP_Q=null;
 function canStaff(){return SESSION&&SESSION.user&&['admin','audit','staff'].includes(SESSION.user.role)}
-async function depOpen(id){try{const bal=await call('quotationBalance',id);if(!bal){toast('ไม่พบใบเสนอราคา');return}if(Number(bal.remaining)<=0.009){toast('รับเงินมัดจำครบมูลค่างานแล้ว');return}DEP_Q={id,bal};$('depmMsg').textContent=bal.quotationNumber+' · มูลค่างาน '+money(bal.quotationNet)+' · คงเหลือ '+money(bal.remaining);$('depmAmt').value='';$('depmAmt').max=bal.remaining;$('depmDate').value=today();$('depmPay').value='transfer';$('depmBank').value='';$('depmNo').value='';$('depmNote').value='';$('depmErr').textContent='';depmCalc();openM('depm');setTimeout(()=>{try{$('depmAmt').focus()}catch(e){}},60)}catch(e){toast(e.message)}}
+const DOC_TYPE_LABEL={invoice:'ใบวางบิล/ใบแจ้งหนี้',receipt:'ใบกำกับภาษี/ใบเสร็จรับเงิน',deposit:'ใบกำกับภาษี/ใบเสร็จรับเงิน',cashsale:'ใบกำกับภาษี/ใบเสร็จรับเงิน (เงินสด)'};
+async function depOpen(id,docType){try{docType=['invoice','deposit','cashsale'].includes(docType)?docType:'deposit';const bal=await call('quotationBalance',id);if(!bal){toast('ไม่พบใบเสนอราคา');return}if(Number(bal.remaining)<=0.009){toast('รับเงินมัดจำครบมูลค่างานแล้ว');return}DEP_Q={id,bal,docType};$('depmTitle').textContent=(docType==='invoice'?'วางบิลเงินมัดจำ — ':'รับเงินมัดจำ — ')+DOC_TYPE_LABEL[docType];$('depmMsg').textContent=bal.quotationNumber+' · มูลค่างาน '+money(bal.quotationNet)+' · คงเหลือ '+money(bal.remaining);$('depmAmt').value='';$('depmAmt').max=bal.remaining;$('depmDate').value=today();$('depmPay').value='transfer';$('depmBank').value='';$('depmNo').value='';$('depmNote').value='';$('depmErr').textContent='';depmCalc();openM('depm');setTimeout(()=>{try{$('depmAmt').focus()}catch(e){}},60)}catch(e){toast(e.message)}}
 function depmCalc(){if(!DEP_Q)return;const amt=Number($('depmAmt').value)||0,vr=Number(DEP_Q.bal.vatRate)||0,vat=amt*vr/100,total=amt+vat,rem=DEP_Q.bal.remaining-amt;$('depmPrev').innerHTML=(vr?('VAT '+vr+'%: <b>'+money(vat)+'</b> · '):'')+'รับจริง'+(vr?' (รวม VAT)':'')+': <b>'+money(total)+'</b> · คงเหลือหลังรับ: <b>'+money(rem)+'</b>';$('depmBtn').disabled=!(amt>0&&amt<=DEP_Q.bal.remaining+0.009)}
-async function depSave(){if(!DEP_Q||busy)return;const amt=Number($('depmAmt').value)||0;if(amt<=0){$('depmErr').textContent='กรุณาระบุยอดเงินมัดจำ';return}if(amt>DEP_Q.bal.remaining+0.009){$('depmErr').textContent='ยอดมัดจำเกินยอดคงเหลือ ('+money(DEP_Q.bal.remaining)+')';return}busy=true;$('depmBtn').disabled=true;try{const r=await call('createDeposit',DEP_Q.id,{amount:amt,date:$('depmDate').value,payMethods:$('depmPay').value,payBank:$('depmBank').value,payNo:$('depmNo').value,notes:$('depmNote').value});closeM('depm');toast('รับเงินมัดจำ '+r.number+' แล้ว · คงเหลือ '+money(r.remaining));await load();await edit(r.id)}catch(e){$('depmErr').textContent=String(e.message).replace(/^Error:\s*/,'')}finally{busy=false;$('depmBtn').disabled=false}}
+async function depSave(){if(!DEP_Q||busy)return;const amt=Number($('depmAmt').value)||0;if(amt<=0){$('depmErr').textContent='กรุณาระบุยอดเงินมัดจำ';return}if(amt>DEP_Q.bal.remaining+0.009){$('depmErr').textContent='ยอดมัดจำเกินยอดคงเหลือ ('+money(DEP_Q.bal.remaining)+')';return}busy=true;$('depmBtn').disabled=true;try{const r=await call('createDeposit',DEP_Q.id,{amount:amt,docType:DEP_Q.docType,date:$('depmDate').value,payMethods:$('depmPay').value,payBank:$('depmBank').value,payNo:$('depmNo').value,notes:$('depmNote').value});closeM('depm');toast('รับเงินมัดจำ '+r.number+' แล้ว · คงเหลือ '+money(r.remaining));await load();await edit(r.id)}catch(e){$('depmErr').textContent=String(e.message).replace(/^Error:\s*/,'')}finally{busy=false;$('depmBtn').disabled=false}}
 function depBoxRender(info,type,status){const el=$('depBox');if(!el)return;if(!info){el.className='hidden';el.innerHTML='';return}
   if(type==='quotation'){
     const rows=(info.deposits||[]).map(x=>`<div class="deprow"><span>${esc(x.number)} · ${esc(x.date)}</span><span>${money(x.base)}${x.vat?' + VAT '+money(x.vat):''} = <b>${money(x.total)}</b></span></div>`).join('')||'<div class="muted" style="padding:4px 0">ยังไม่มีการรับเงินมัดจำ</div>';
@@ -1488,15 +1517,15 @@ function billBoxRender(info,type,status){const el=$('billBox');if(!el)return;if(
     el.className='panel depbox';el.innerHTML=`<div class="depttl">📑 ใบวางบิลแบ่งงวด</div><div class="depsum"><span>${me?'งวดที่ <b>'+me.no+'</b>'+(me.pct?' ('+me.pct+'%)':''):'งวดแบ่งจ่าย'} จากใบเสนอราคา <b>${esc(info.quotationNumber)}</b> · มูลค่างานเต็ม ${money(info.fullNet)} · วางบิลสะสม ${money(info.billedBase)} · คงเหลือ ${money(info.remaining)}</span></div>`;
   }
 }
-async function instOpen(id){try{const bill=await call('quotationBilling',id);if(!bill){toast('ไม่พบใบเสนอราคา');return}if(bill.hasFull){toast('ใบนี้ออกใบวางบิลเต็มจำนวนแล้ว');return}if(Number(bill.remaining)<=0.009){toast('วางบิลครบมูลค่างานแล้ว');return}
+async function instOpen(id,docType){try{docType=['invoice','receipt','cashsale'].includes(docType)?docType:'invoice';const bill=await call('quotationBilling',id);if(!bill){toast('ไม่พบใบเสนอราคา');return}if(bill.hasFull){toast('ใบนี้ออกใบวางบิลเต็มจำนวนแล้ว');return}if(Number(bill.remaining)<=0.009){toast('วางบิลครบมูลค่างานแล้ว');return}
   let availDep=0;try{const bal=await call('quotationBalance',id);availDep=Math.max(0,(Number(bal.depositBase)||0)-(Number(bill.depDeducted)||0));}catch(e){}
-  INST_Q={id,bill,availDep};$('instMsg').textContent=bill.quotationNumber+' · งวดที่ '+bill.nextNo+' · คงเหลือ '+money(bill.remaining)+' (จาก '+money(bill.fullNet)+')';
+  INST_Q={id,bill,availDep,docType};$('instTitle').textContent='แบ่งจ่าย — '+DOC_TYPE_LABEL[docType];$('instMsg').textContent=bill.quotationNumber+' · งวดที่ '+bill.nextNo+' · คงเหลือ '+money(bill.remaining)+' (จาก '+money(bill.fullNet)+')';
   $('instMode').value='pct';$('instVal').value='';$('instDate').value=today();$('instLabel').value='';
   $('instDepWrap').style.display=availDep>0.009?'block':'none';$('instDep').checked=false;$('instDepLbl').textContent='หักเงินมัดจำในงวดนี้ (มัดจำคงเหลือ '+money(availDep)+')';
   $('instErr').textContent='';instModeUpd();instCalc();openM('instm');setTimeout(()=>{try{$('instVal').focus()}catch(e){}},60)}catch(e){toast(e.message)}}
 function instModeUpd(){const m=$('instMode').value;$('instVal').placeholder=m==='pct'?'เช่น 30 (%)':'เช่น 30000 (บาท)';$('instValUnit').textContent=m==='pct'?'%':'บาท';instCalc()}
 function instCalc(){if(!INST_Q)return;const m=$('instMode').value,v=Number($('instVal').value)||0,full=INST_Q.bill.fullNet,vr=Number(INST_Q.bill.vatRate)||0;let base=m==='pct'?r2(full*v/100):r2(v);if(base<0)base=0;let dep=$('instDep').checked?Math.min(INST_Q.availDep,base):0;const net=base-dep,vat=net*vr/100,total=net+vat,rem=INST_Q.bill.remaining-base;$('instPrev').innerHTML=`ฐานงวด: <b>${money(base)}</b>${dep?' · หักมัดจำ <b>'+money(dep)+'</b>':''}${vr?' · VAT '+vr+'%: <b>'+money(vat)+'</b>':''} · รวมงวดนี้: <b>${money(total)}</b> · คงเหลือหลังงวด: <b>${money(rem)}</b>`;$('instBtn').disabled=!(base>0&&base<=INST_Q.bill.remaining+0.009)}
-async function instSave(){if(!INST_Q||busy)return;const m=$('instMode').value,v=Number($('instVal').value)||0;if(v<=0){$('instErr').textContent='กรุณาระบุค่างวด';return}busy=true;$('instBtn').disabled=true;try{const inp={date:$('instDate').value,label:$('instLabel').value,deductDeposit:$('instDep').checked};if(m==='pct')inp.pct=v;else inp.amount=v;const r=await call('createInstallment',INST_Q.id,inp);closeM('instm');toast('สร้างงวดที่ '+r.installmentNo+' ('+r.number+') แล้ว · คงเหลือ '+money(r.remaining));await load();await edit(r.id)}catch(e){$('instErr').textContent=String(e.message).replace(/^Error:\s*/,'')}finally{busy=false;$('instBtn').disabled=false}}
+async function instSave(){if(!INST_Q||busy)return;const m=$('instMode').value,v=Number($('instVal').value)||0;if(v<=0){$('instErr').textContent='กรุณาระบุค่างวด';return}busy=true;$('instBtn').disabled=true;try{const inp={date:$('instDate').value,label:$('instLabel').value,deductDeposit:$('instDep').checked,docType:INST_Q.docType};if(m==='pct')inp.pct=v;else inp.amount=v;const r=await call('createInstallment',INST_Q.id,inp);closeM('instm');toast('สร้างงวดที่ '+r.installmentNo+' ('+r.number+') แล้ว · คงเหลือ '+money(r.remaining));await load();await edit(r.id)}catch(e){$('instErr').textContent=String(e.message).replace(/^Error:\s*/,'')}finally{busy=false;$('instBtn').disabled=false}}
 function lrow(d){const id=esc(d.id),no=esc(d.number);
   return lrowHtml({kind:d.type,open:`edit('${id}')`,files:DOCFILES[d.number]||0,date:d.date,number:d.number,status:d.status,statusTh:statusTh[d.status]||d.status,statusCell:docStatusCell(d),party:d.customerName,label:types[d.type]||d.type,total:d.total,edits:Number(d.editCount)||0,editTip:'แก้ไขล่าสุด '+(d.lastEditedAt||'-')+(d.lastEditedBy?' โดย '+d.lastEditedBy:'')+(d.lastEditReason?'\nเหตุผล: '+d.lastEditReason:''),
     eye:`<button class="btn eye" title="ดูตัวอย่างเอกสาร" aria-label="ดูตัวอย่างเอกสาร" onclick="previewDoc('${id}','${no}')">${EYE}</button>`,

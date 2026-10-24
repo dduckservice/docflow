@@ -71,6 +71,11 @@ async function printModel(ctx, id, mode, opts) {
   if (taxReceipt) titleEn = 'Tax Invoice / Receipt';
   if ((t === 'receipt' || t === 'cashsale') && noVat) titleEn = t === 'cashsale' ? 'Receipt (Cash Sale)' : 'Receipt';
   if (t === 'deposit' && noVat) titleEn = 'Deposit Receipt';
+  // Phase: เอกสารมัดจำที่ออกเป็นใบวางบิล/เงินสด (variant='deposit') → เติม "(เงินมัดจำ)" ให้ชัด
+  if (String(d.variant) === 'deposit' && t !== 'deposit') { L[0] = L[0] + ' (เงินมัดจำ)'; titleEn = titleEn + ' (Deposit)'; }
+  // หัวเอกสารให้อยู่บรรทัดเดียวเสมอ — ย่อขนาดฟอนต์อัตโนมัติตามความยาวข้อความ
+  const tlen = String(en ? titleEn : L[0]).length;
+  const titleSize = tlen <= 16 ? 30 : tlen <= 22 ? 26 : tlen <= 30 ? 22 : tlen <= 40 ? 18 : 15;
   const isPurchase = t === 'po' || t === 'gr' || t === 'expense';
   // Phase 2: หักเงินมัดจำ — ฐานภาษี = ยอดหลังหักส่วนลด − มัดจำ (VAT/WHT คิดบนฐานนี้)
   const depAmt = round2(Number(d.depositAmount) || 0), afterDisc = round2(d.subtotal - d.discount);
@@ -78,7 +83,7 @@ async function printModel(ctx, id, mode, opts) {
   data.lang = en ? 'en' : 'th'; data.pages = printPages(po); data.showNo = !!po; data.opts = po;
   data.mode = mode; data.padX = mode === 'pdf' ? PDF_SAFE_PAD_PX : 0; data.padY = mode === 'pdf' ? PDF_PAD_Y_PX : 0;
   const dt = en ? ceDate : thDate, pm = String(d.payMethods || '').split(',');
-  data.f = { titleTh: en ? titleEn : L[0], subTitle: en ? '' : L[1], dueLabel: d.dueDate ? (en ? LE[1] : L[2]) : '', signLeft: en ? LE[2] : L[3], signRight: en ? LE[3] : L[4],
+  data.f = { titleTh: en ? titleEn : L[0], titleSize, subTitle: en ? '' : L[1], dueLabel: d.dueDate ? (en ? LE[1] : L[2]) : '', signLeft: en ? LE[2] : L[3], signRight: en ? LE[3] : L[4],
     delTitle: en ? 'Delivery Note' : 'ใบส่งของ', delSignLeft: en ? 'Received by' : 'ผู้รับสินค้า', delSignRight: en ? 'Delivered by' : 'ผู้ส่งสินค้า',
     lblOrig: en ? 'Original' : 'ต้นฉบับ', lblCopy: en ? 'Copy' : 'สำเนา', docType: t, canDeliver: ['invoice', 'taxinvoice', 'receipt', 'cashsale'].includes(t), hasPayBox: PAID_TYPES.includes(t),
     accent: DOC_STYLE[t].accent, tri: DOC_STYLE[t].tri, isReceipt: PAID_TYPES.includes(t),

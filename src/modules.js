@@ -394,6 +394,27 @@ async function convertPurchase(ctx, poId) {
   await ctx.log(id, 'CONVERT', po.number + ' -> ' + number);
   return { success: true, id, number };
 }
+// สร้างใบสั่งซื้อ (PO) จากใบเสนอราคาฝั่งขาย — คัดลอกรายการมาเป็น draft ให้ผู้ใช้เลือกผู้ขาย/ซัพพลายเออร์ภายหลัง
+async function createPoFromQuotation(ctx, quotationId) {
+  await lockT(ctx);
+  const D = require('./documents');
+  const q = await D.findDoc(ctx, quotationId);
+  if (!q) fail('ไม่พบใบเสนอราคา');
+  if (q.type !== 'quotation') fail('สร้างใบสั่งซื้อจากใบเสนอราคาเท่านั้น');
+  const items = await D.docItems(ctx, q.id);
+  if (!items.length) fail('ใบเสนอราคาไม่มีรายการสินค้า');
+  const comp = await D.getCompany(ctx, false);
+  const vatRate = parseVat(q.vatRate);
+  const subtotal = round2(items.reduce((s, x) => s + x.quantity * x.price, 0)), discount = round2(items.reduce((s, x) => s + x.discount, 0));
+  const net = round2(subtotal - discount), vatAmount = round2(net * vatRate / 100), total = round2(net + vatAmount);
+  const id = uuid(), now = new Date(), number = await nextPurchaseNumber(ctx, PURCHASE_PREFIX.po);
+  await ctx.insert('purchase_docs', { id, number, type: 'po', date: todayStr(), expectedDate: '', companyId: String(comp.id),
+    vendorName: '', subtotal, discount, vatRate, vatAmount, total, notes: 'อ้างอิงใบเสนอราคา ' + q.number, status: 'draft', sourceDocumentId: '',
+    createdAt: now, updatedAt: now, createdBy: ctx.username() });
+  await ctx.insertMany('purchase_items', items.map((x, i) => ({ id: uuid(), documentId: id, lineNo: i + 1, productId: '', description: x.description, quantity: x.quantity, receivedQty: '', unit: x.unit, price: x.price, discount: x.discount, amount: x.amount })));
+  await ctx.log(id, 'CREATE', number + ' | สร้างใบสั่งซื้อจากใบเสนอราคา ' + q.number);
+  return { success: true, id, number };
+}
 async function deletePurchaseDoc(ctx, id) {
   await lockT(ctx);
   const d = await findPurchase(ctx, id);
@@ -444,4 +465,4 @@ async function productAsPrintDoc(ctx, id) {
 
 module.exports = { expStatusOf, listContacts, saveContact, deleteContact, importContactsFromDocs, listProducts, saveProduct, deleteProduct,
   listExpenses, getExpense, saveExpense, setExpenseStatus, deleteExpense, listExpenseCategories, saveExpenseCategory, deleteExpenseCategory,
-  listPurchaseDocs, getPurchaseDoc, savePurchaseDoc, convertPurchase, deletePurchaseDoc, findPurchase, purchaseItems, stockAdjust, syncPoReceived, purchaseAsPrintDoc, expenseAsPrintDoc, productAsPrintDoc };
+  listPurchaseDocs, getPurchaseDoc, savePurchaseDoc, convertPurchase, createPoFromQuotation, deletePurchaseDoc, findPurchase, purchaseItems, stockAdjust, syncPoReceived, purchaseAsPrintDoc, expenseAsPrintDoc, productAsPrintDoc };

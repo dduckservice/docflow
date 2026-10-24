@@ -30,7 +30,7 @@ const TABLE = {
   chatSend: [CH.chatSend, 'viewer', false, true],
   chatUnread: [CH.chatUnread, 'viewer', false, true],
   chatFile: [CH.chatFile, 'viewer', false, true],
-  monitorUsers: [MO.monitorUsers, 'audit', false],
+  monitorUsers: [MO.monitorUsers, 'super', false],
   backupOverview: [FB.backupOverview, 'super', false],
   backupCreate: [FB.backupCreate, 'super', false],
   backupRestore: [FB.backupRestore, 'super', false],
@@ -131,6 +131,7 @@ const TABLE = {
   getPurchaseDoc: [M.getPurchaseDoc, 'viewer', true],
   savePurchaseDoc: [M.savePurchaseDoc, 'staff', true],
   convertPurchase: [M.convertPurchase, 'staff', true],
+  createPoFromQuotation: [M.createPoFromQuotation, 'staff', true],
   deletePurchaseDoc: [M.deletePurchaseDoc, 'audit', true]
 };
 // ฟังก์ชันที่เรียกได้โดยไม่ต้องล็อกอิน
